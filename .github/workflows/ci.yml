@@ -1,0 +1,58 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm audit --audit-level=high
+        if: matrix.node == 24
+      - run: npm run build
+        if: matrix.node == 24
+      - run: npm run test:integration
+        if: matrix.node == 24
+      - name: Build and verify nested static Pages export
+        if: matrix.node == 24
+        env:
+          CI_PAGES_URL: https://pages.example.test/team/project
+          CI_SERVER_URL: https://gitlab.example.test
+          CI_PROJECT_PATH: team/project
+          HOOSPEC_PAGES_PATH: hoospec
+          HOOSPEC_AI_KEY: test-only-server-secret-that-must-never-be-exported
+          HOOSPEC_REPOSITORY_AGENT_TOKEN: test-only-bridge-secret-that-must-never-be-exported
+        run: npm run build:pages && npm run test:pages
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: docker build --tag hoospec:ci .
+      - run: node scripts/test-container.mjs hoospec:ci

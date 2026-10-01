@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.hoospec
+.env*
+test-results
+playwright-report
+artifacts
+
+.pages-build-*
+out
+.npm

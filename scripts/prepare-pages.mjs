@@ -1,0 +1,11 @@
+import { cp, mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const projectRoot = process.env.CI_PROJECT_DIR;
+const pagesPath = process.env.HOOSPEC_PAGES_PATH || 'hoospec';
+if (!projectRoot || !/^[\w-]+(?:\/[\w-]+)*$/.test(pagesPath)) throw new Error('CI_PROJECT_DIR und ein gültiger HOOSPEC_PAGES_PATH werden benötigt.');
+const output = path.join(projectRoot, '.hoospec-pages');
+await mkdir(output, { recursive: true });
+await cp(path.resolve('out'), path.join(output, pagesPath), { recursive: true });
+await writeFile(path.join(output, 'path'), pagesPath + '\n');
+await writeFile(path.join(output, 'install.json'), JSON.stringify({ schemaVersion: 1, pagesPath }));
+await writeFile(path.join(output, pagesPath, '.hoospec-generated'), 'Hoospec static export\n');

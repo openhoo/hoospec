@@ -1,0 +1,14 @@
+{
+  "$schema": "./hoospec.config.schema.json",
+  "schemaVersion": 1,
+  "gitlab": {
+    "instance": "",
+    "project": "",
+    "branch": "",
+    "clientId": "",
+    "directory": "hoospec",
+    "specDirectory": "",
+    "adrDirectory": "docs/adr"
+  },
+  "agent": { "url": "" }
+}
