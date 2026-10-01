@@ -1,6 +1,6 @@
 # Release review
 
-Reviewed on **2026-10-02**. This report describes local verification and a disposable self-managed GitLab deployment. It does not claim a production rollout or a hosted GitHub CI run.
+Reviewed on **2026-10-02**. This report describes local verification and a disposable self-managed GitLab deployment. It does not claim a production rollout. The initial public GitHub CI run is recorded below.
 
 ## Changes made
 
@@ -42,7 +42,7 @@ Reviewed on **2026-10-02**. This report describes local verification and a dispo
 | Nested Pages export | `/team/project/hoospec`; all referenced assets exist, licenses included, no API/server/workspace files or supplied server-key markers |
 | Container | Production build passed; non-root serving, assets, real JSON save, foreign-origin rejection and volume persistence after restart passed |
 | Dependency audit | **0 reported vulnerabilities**, full dependency tree |
-| GitHub workflow syntax | `actionlint` passed; hosted GitHub execution remains pending publication |
+| GitHub workflow | `actionlint` passed; initial public CI run 36941087038 passed for commit `774b495f66b1d0f4afd9e20fca900e43016eaab8` (Node 22/24, integration, nested Pages and container) |
 | Publication secret scan | Gitleaks scan of the clean source snapshot passed with no findings |
 
 ### Live GitLab Pages
@@ -61,6 +61,10 @@ An ordinary user registered the public OAuth application without instance-admin 
 - Light and dark desktop layouts were visually inspected. At 390 px, both document and canvas widths were 390 px, with no horizontal overflow.
 - Earlier editor checks verified no vertical shift from opening the unchanged title editor, table row insertion with the agent input still visible, Tab cell navigation, autosave and Ctrl+Z/Y.
 - Final local browser console inspection returned no warnings or errors. Screenshots use isolated synthetic documents. The original studio's four document sources remained unchanged.
+
+## Publication follow-up
+
+The initial source was published publicly as `openhoo/hoospec` under Apache-2.0. GitHub CodeQL identified predictable temporary-file output in the optional live GitLab fixture. The fixture now uses an unpredictable private directory and an exclusive file creation with mode 0600. Its other reported flows are intentional: a user-supplied test credential is sent only to the explicitly configured loopback GitLab fixture, and non-secret API metadata is serialized as JSON for inspection. No scan or security control was disabled.
 
 ## Operating limits
 

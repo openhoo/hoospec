@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { GitLabBackend } from '../src/lib/gitlab-backend.ts';
@@ -81,5 +81,9 @@ await check('atomic GitLab batch rejects outdated last_commit_id without changin
   await client.commit([{ action: 'update', file_path: remote.file_path, content: current, last_commit_id: latest.last_commit_id }], 'Restore fixture');
 });
 backend.disconnect();
-await writeFile(path.join(tmpdir(), 'hoospec-gitlab-test-project.json'), JSON.stringify({ ...config, projectId: project.id, projectPath: project.path_with_namespace, webUrl: project.web_url, passed }, null, 2));
+// Keep API metadata in a private, unpredictable directory; never follow a pre-existing temp-file symlink.
+const metadataDirectory = await mkdtemp(path.join(tmpdir(), 'hoospec-gitlab-test-'));
+const metadataPath = path.join(metadataDirectory, 'project.json');
+await writeFile(metadataPath, JSON.stringify({ ...config, projectId: project.id, projectPath: project.path_with_namespace, webUrl: project.web_url, passed }, null, 2), { flag: 'wx', mode: 0o600 });
+console.log(`Fixture metadata: ${metadataPath}`);
 console.log(`${passed} live GitLab checks passed. Project: ${project.path_with_namespace}`);

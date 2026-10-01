@@ -46,7 +46,7 @@ HOOSPEC_TEST_GITLAB_TOKEN_FILE=/path/to/protected/test-token \
 npm run test:gitlab
 ```
 
-The fixture refuses remote hosts, creates a private test project and verifies discovery, atomic commits, reconnect, undo/redo, ADR decisions, conflicts and externally changed generated files. The project is intentionally left for inspection. Metadata is written to the system temporary directory, without credentials. The token is for fixture setup, not the application's OAuth login.
+The fixture refuses remote hosts, creates a private test project and verifies discovery, atomic commits, reconnect, undo/redo, ADR decisions, conflicts and externally changed generated files. The project is intentionally left for inspection. Metadata is written without credentials to an exclusively created file inside a private, unpredictable temporary directory. The fixture prints its metadata path for inspection. The token is for fixture setup, not the application's OAuth login.
 
 For release testing, also exercise Pages access control with an anonymous visitor, a nonmember, a reporter and a member with push permission. Verify OAuth using a public application with the exact deployed callback URL, and inspect a saved source / JSON commit in GitLab.
 
