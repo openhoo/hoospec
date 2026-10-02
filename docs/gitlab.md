@@ -178,3 +178,59 @@ npm run test:integration
 `npm run test:gitlab` ist ein zusätzlicher Integrationstest gegen eine echte **lokale, disposable** GitLab-Instanz. Er erstellt ein eigenes privates Testprojekt. Setze `HOOSPEC_TEST_GITLAB_TOKEN_FILE` auf eine geschützte Datei mit dem Test-Token; dieser Zugang automatisiert die Testeinrichtung und ist unabhängig vom OAuth-Login normaler Nutzer. Details stehen in [testing.md](testing.md).
 
 Offizielle Referenzen: GitLab-Dokumentation zu **Pages access control**, **OAuth provider / user-owned applications**, **OAuth authorization code with PKCE** und **CI YAML pages.publish**.
+
+## Persönlicher Copilot-Zugang
+
+Die SPA kann zusätzlich zum GitLab-Login ein persönliches GitHub Copilot-Konto verbinden. GitLab bestimmt weiter den Projektzugriff. Copilot wird nur für AI-Anfragen verwendet; es erhält keine GitLab-Zugangsdaten und erzeugt keine Repository-Commits.
+
+GitLab Pages kann den persönlichen Copilot-Zugang **ohne zusätzlichen Server** verwenden. Der vorhandene GitLab-Runner übernimmt einmalig GitHubs OAuth Device Flow; danach fragt die SPA Copilot direkt ab. Jede Person nutzt ihr eigenes Abo.
+
+### Einrichtung auf GitLab Pages
+
+1. Eine **eigene GitHub OAuth App** anlegen und **Enable Device Flow** aktivieren. Die Callback-URL kann auf die Studio-Adresse zeigen. Für diesen Ablauf braucht Hoospec kein Client Secret und verwendet keine fremde App-ID.
+2. Die öffentliche Client-ID in `hoospec.config.json` setzen und Pages neu bauen:
+
+   ```json
+   { "copilot": { "clientId": "öffentliche-ID-eurer-GitHub-OAuth-App" } }
+   ```
+
+   Alternativ: `NEXT_PUBLIC_HOOSPEC_COPILOT_CLIENT_ID`. Die SPA bietet dieses Feld auch unter **Repository-Verbindung → Copilot → Copilot konfigurieren** an.
+3. Der aktuelle Include `tools/hoospec/.gitlab/integrate.yml` enthält den Job `hoospec-copilot-login`. Bei eigenständiger Installation enthält die mitgelieferte `.gitlab-ci.yml` denselben Job. Bei einer eigenen Stage-Liste ohne `deploy` im Projekt den Job einer vorhandenen regulären Stage zuordnen, z. B. `hoospec-copilot-login: { stage: test }`. `.pre` ist hierfür ungeeignet: GitLab verwirft eine Pipeline, die ausschließlich `.pre`-Jobs enthält. Durch `needs: []` startet der Login trotzdem unmittelbar. Ein vorhandener Runner muss das Node-24-Image ausführen und GitHub erreichen können. Der Job läuft ohne npm-Installation und nur als API-Pipeline auf dem Defaultbranch.
+4. Unter **Settings → CI/CD → Variables → Minimum role to use pipeline variables** die vorgesehene Rolle zulassen (z. B. Developer). Für den Login werden nur die öffentliche App-ID, ein öffentlicher Browser-Schlüssel und eine zufällige Sitzungskennung als Pipeline-Variablen übergeben. Projekt-Maintainer richten dies ein; GitLab-Instanzadministratorrechte sind dafür nicht erforderlich. Geschützte Branches können zusätzliche Pipeline-Berechtigungen verlangen.
+5. Falls das bestehende Projekt `workflow: rules` einschränkt, diese Regel **vor** den bisherigen Regeln ergänzen und sie auf Projektebene erlauben:
+
+   ```yaml
+   workflow:
+     rules:
+       - if: '$HOOSPEC_COPILOT_LOGIN == "1" && $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+       # bisherige Regeln beibehalten
+   ```
+
+   Normale Build-, Deploy- und Pages-Jobs sollten Login-Pipelines überspringen. Diese Regel jeweils **vor** ihren bisherigen Job-Regeln ergänzen; Jobs mit `only/except` zuerst in gleichwertige `rules` umstellen:
+
+   ```yaml
+   rules:
+     - if: '$HOOSPEC_COPILOT_LOGIN == "1"'
+       when: never
+     # bisherige Regeln beibehalten
+   ```
+
+   Der Hoospec-Build und die eigenständige Pages-Pipeline überspringen Login-Pipelines bereits. Bei bestehenden Pages-`needs` müssen abhängige Jobs ebenfalls übersprungen werden, damit die Pipeline gültig bleibt. Der Login löst weder einen Commit noch ein Deployment aus.
+
+### Verwendung und Sicherheit
+
+Nach dem GitLab-Login **Mit Copilot verbinden** wählen. Hoospec startet den Runner, zeigt den GitHub-Code und wartet auf deine Bestätigung. Danach erscheint die Modellauswahl; der Inline-Agent nutzt die direkte Copilot-Verbindung. **Abbrechen** beendet eine laufende Anmeldung. **Copilot trennen** entfernt den Zugang aus dem Arbeitsspeicher; GitLab bleibt verbunden.
+
+Der private Entschlüsselungsschlüssel existiert nur in der initiierenden Browser-Sitzung. Der Runner hält OAuth- und Copilot-Tokens im Arbeitsspeicher und schreibt ausschließlich ein mit RSA-OAEP/SHA-256 und AES-256-GCM verschlüsseltes Artefakt. Die Verschlüsselung bindet es an Projekt, Pipeline und Browser-Sitzung. Im Job-Log steht nur der angezeigte Login-Code, niemals ein OAuth- oder Copilot-Token. CI-Debug-Logging wird für den Login verweigert. Runner und Projekt-CI müssen vertrauenswürdig sein: Sie führen den Token-Austausch aus.
+
+Nach dem Entschlüsseln versucht Hoospec, Log und Artefakt über GitLabs Job-Erase-API zu entfernen. Dafür muss GitLab die Aktion zulassen; andernfalls bleibt nur das verschlüsselte Artefakt mit zehn Minuten deklarierter Aufbewahrung. GitLabs Einstellung **Keep artifacts from most recent successful jobs** kann diese Frist verlängern; bei Bedarf im Projekt deaktivieren. Das Artefakt enthält kein GitHub-OAuth-Token.
+
+Der Browser hält nur den kurzlebigen Copilot-API-Zugang im Arbeitsspeicher. Es gibt keine Speicherung in LocalStorage, IndexedDB oder im Repository. Nach Reload oder Ablauf ist ein neuer Login nötig; Zugangsdaten werden nicht über CI-Variablen erneuert. Die ursprüngliche GitHub-App-Autorisierung kann in GitHub separat widerrufen werden. Dokumentkontext und Änderungswunsch gehen direkt an Copilot. Die bestehende Validierung und Versionsprüfung laufen vor dem Speichern; Änderungen bleiben lokal bis zur ausdrücklichen MR-Synchronisierung.
+
+**Kompatibilitätsgrenze:** Der serverfreie Pfad verwendet Copilots direkten Chat-Endpunkt und `copilot_internal/v2/token`, keine Browser-Version des offiziellen SDKs. Diese Schnittstellen sind kein zugesicherter öffentlicher Copilot-SDK-Vertrag. GitHub kann eigene OAuth-Apps oder einzelne Modelle einschränken; die Integration meldet fehlenden Zugang, statt auf fremde App-IDs auszuweichen. Der reale GitLab-Runner-Ablauf wird mit synthetischen GitHub-/Copilot-Antworten getestet. Eine echte Anmeldung und Inferenz mit eurer eigenen App müssen separat geprüft werden.
+
+### Optionaler SDK-Dienst
+
+Für Installationen, die einen Node-Dienst betreiben, bleibt der alternative offizielle SDK-Pfad verfügbar. `copilot.url` kann auf `https://agent.example.com/api/copilot` zeigen. Am Hoospec-Container `HOOSPEC_COPILOT_CLIENT_ID` (eigene App-ID) und `HOOSPEC_PAGES_ORIGIN` (HTTPS-Origin ohne Pfad) konfigurieren. Wenn `copilot.clientId` gesetzt ist, verwendet die SPA den Runner-Pfad. Ohne diese ID kann sie den optionalen Dienst verwenden.
+
+Der SDK-Dienst hält GitHub-Tokens höchstens eine Stunde im Prozessspeicher; der Browser erhält eine zufällige Sitzungskennung. Er unterstützt einen Prozess. Das SDK startet isoliert, ohne Dateizugriff, Shell-Werkzeuge, MCP oder Projektinstruktionen. Für GitLab Pages ist dieser Dienst nicht erforderlich.

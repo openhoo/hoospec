@@ -1,3 +1,11 @@
+include:
+  - local: .gitlab/copilot.yml
+
+hoospec-copilot-login:
+  extends: .hoospec-copilot-login
+  script:
+    - node scripts/copilot-login.mjs
+
 image: node:24-bookworm-slim
 
 stages:
@@ -15,6 +23,10 @@ cache:
     - .npm/
 
 verify:
+  rules:
+    - if: '$HOOSPEC_COPILOT_LOGIN == "1"'
+      when: never
+    - when: on_success
   stage: verify
   script:
     - npm ci --cache .npm --prefer-offline
@@ -30,4 +42,6 @@ pages:
   pages:
     publish: out
   rules:
+    - if: '$HOOSPEC_COPILOT_LOGIN == "1"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

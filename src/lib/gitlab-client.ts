@@ -1,6 +1,7 @@
+import { copilotUrl } from './copilot-connection';
 import type { GitLabAccess } from './gitlab-auth';
 import type { ReviewSession } from './studio-backend';
-export type GitLabConfig = { instance: string; project: string; branch: string; directory: string; specDirectory: string; adrDirectory: string; clientId: string; agentUrl?: string; requireMembership?: boolean };
+export type GitLabConfig = { instance: string; project: string; branch: string; directory: string; specDirectory: string; adrDirectory: string; clientId: string; agentUrl?: string; copilotUrl?: string; copilotClientId?: string; requireMembership?: boolean };
 export type RepositoryFile = { file_path: string; content: string; encoding: string; last_commit_id: string; size: number };
 export type CommitAction = { action: 'create' | 'update'; file_path: string; content: string; last_commit_id?: string };
 export function repositoryPath(input: string, allowEmpty = false) {
@@ -28,7 +29,8 @@ export function normalizeGitLabConfig(input: GitLabConfig): GitLabConfig {
   }
   project = repositoryPath(project);
   if (/[?#\x7f]/.test(project) || project.length > 512 || input.branch.length > 255 || /[\x00-\x1f\x7f]/.test(input.branch)) throw new Error('Bitte ein gültiges Projekt und einen gültigen Branch angeben.');
-  return { instance, project, branch: input.branch.trim(), directory: repositoryPath(input.directory), specDirectory: repositoryPath(input.specDirectory, true), adrDirectory: repositoryPath(input.adrDirectory, true), clientId: (input.clientId || '').trim(), ...(input.agentUrl ? { agentUrl: input.agentUrl.trim() } : {}), requireMembership: input.requireMembership === true };
+  if (input.copilotClientId && !/^[A-Za-z0-9_.-]{5,120}$/.test(input.copilotClientId)) throw new Error('Ungültige öffentliche Copilot OAuth-App-ID.');
+  return { ...(input.copilotClientId ? { copilotClientId: input.copilotClientId } : {}), instance, project, branch: input.branch.trim(), directory: repositoryPath(input.directory), specDirectory: repositoryPath(input.specDirectory, true), adrDirectory: repositoryPath(input.adrDirectory, true), clientId: (input.clientId || '').trim(), ...(input.agentUrl ? { agentUrl: input.agentUrl.trim() } : {}), ...(input.copilotUrl ? { copilotUrl: copilotUrl(input.copilotUrl) } : {}), requireMembership: input.requireMembership === true };
 
 }
 export class GitLabError extends Error {
@@ -50,16 +52,20 @@ export class GitLabClient {
     if (!this.token && !this.access) throw new Error('Bitte bei GitLab anmelden oder einen Zugriffstoken angeben.');
   }
   disconnect() { this.token = ''; this.access?.disconnect(); this.access = undefined; }
-  async api<T>(endpoint: string, init?: RequestInit): Promise<{ data: T; nextPage: string }> {
+  async raw(endpoint: string, init?: RequestInit): Promise<Response> {
     if (!this.token && !this.access) throw new Error('Bitte erneut mit GitLab verbinden.');
     const token = this.access ? await this.access.getToken() : this.token;
     let response: Response;
-    try { response = await this.fetcher.call(globalThis, `${this.config.instance}/api/v4${endpoint}`, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000), credentials: 'omit', redirect: 'error', headers: { Authorization: `Bearer ${token}`, ...(init?.body ? { 'Content-Type': 'application/json' } : {}) } }); }
+    try { response = await this.fetcher.call(globalThis, `${this.config.instance}/api/v4${endpoint}`, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000), credentials: 'omit', redirect: 'error', cache: 'no-store', headers: { Authorization: `Bearer ${token}`, ...(init?.body ? { 'Content-Type': 'application/json' } : {}) } }); }
     catch { throw new Error('GitLab ist nicht erreichbar. Bitte Adresse und CORS-Freigabe für diese Pages-Adresse prüfen.'); }
     if (!response.ok) {
       const message = response.status === 401 ? 'Die GitLab-Anmeldung ist abgelaufen oder ungültig.' : response.status === 403 ? 'GitLab verweigert den Zugriff. Bitte Projektberechtigung, API-Scope und Branch-Schutz prüfen.' : response.status === 404 ? 'Projekt, Branch oder Datei wurde in GitLab nicht gefunden.' : init?.method === 'POST' ? 'GitLab hat den Schreibvorgang abgelehnt. Der Branch oder eine Datei könnte inzwischen geändert worden sein. Bitte den aktuellen Stand prüfen.' : `GitLab-Anfrage fehlgeschlagen (HTTP ${response.status}).`;
       throw new GitLabError(message, response.status);
     }
+    return response;
+  }
+  async api<T>(endpoint: string, init?: RequestInit): Promise<{ data: T; nextPage: string }> {
+    const response = await this.raw(endpoint, init);
     return { data: await response.json() as T, nextPage: response.headers.get('x-next-page') || '' };
   }
   private get projectPath() { return `/projects/${encodeURIComponent(this.config.project)}`; }

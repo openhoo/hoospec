@@ -49,3 +49,38 @@ test('a completed GitLab agent edit is validated into a local draft without a co
   assert.match((await backend.load()).files[0].source, /a better card/);
   assert.equal((await backend.load()).repository!.changes.length, 1); assert.equal(commits(), 0); backend.disconnect();
 });
+
+test('Copilot connection uses the existing selection and saves only a validated local draft', async () => {
+  const { CopilotConnection } = await import('../src/lib/copilot-connection');
+  const { backend, body, commits } = fixture(async () => { throw new Error('Legacy bridge must not be used'); });
+  await backend.load();
+  const connection = new CopilotConnection('https://copilot.test/api/copilot', async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    if (request.action === 'start') return Response.json({ session: 'a'.repeat(64), userCode: 'CODE', verificationUrl: 'https://github.com/login/device' });
+    if (request.action === 'poll') return Response.json({ status: 'connected', session: 'b'.repeat(64), models: [{ id: 'test-model', name: 'Test model' }] });
+    if (request.action === 'disconnect') return Response.json({ disconnected: true });
+    assert.equal(request.nodeId, body.nodeId); assert.equal(request.model, 'test-model');
+    return new Response('event: complete\ndata: {"replacement":"    Given a Copilot card"}\n\n');
+  });
+  await connection.start(); await connection.poll(); backend.configureCopilot(connection);
+  assert.equal((await backend.load()).aiReady, true); assert.match((await backend.load()).model, /Copilot/);
+  // Changing the model / reopening the connection must not terminate its session.
+  backend.configureCopilot(connection); assert.equal(connection.connected, true);
+  const result = await (await backend.agent(body)).text(); assert.match(result, /event: complete/);
+  assert.match((await backend.load()).files[0].source, /Copilot card/); assert.equal(commits(), 0);
+  backend.disconnect(); assert.equal(connection.connected, false);
+});
+test('invalid Copilot output cannot overwrite a saved Gherkin document', async () => {
+  const { CopilotConnection } = await import('../src/lib/copilot-connection');
+  const { backend, body, commits } = fixture(async () => { throw new Error('Legacy bridge must not be used'); }); await backend.load();
+  const connection = new CopilotConnection('https://copilot.test/api/copilot', async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    if (request.action === 'start') return Response.json({ session: 'a'.repeat(64), userCode: 'CODE', verificationUrl: 'https://github.com/login/device' });
+    if (request.action === 'poll') return Response.json({ status: 'connected', session: 'b'.repeat(64), models: [{ id: 'test', name: 'Test' }] });
+    if (request.action === 'disconnect') return Response.json({});
+    return new Response('event: complete\ndata: {"replacement":"NOT VALID GHERKIN"}\n\n');
+  });
+  await connection.start(); await connection.poll(); backend.configureCopilot(connection);
+  const response = await backend.agent(body); assert.match(await response.text(), /event: error/);
+  assert.match((await backend.load()).files[0].source, /Given a card/); assert.equal(commits(), 0); backend.disconnect();
+});

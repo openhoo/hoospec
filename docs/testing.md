@@ -57,3 +57,15 @@ For release testing, also exercise Pages access control with an anonymous visito
 - Scan the files intended for publication with Gitleaks using `--redact`.
 - Review the ignore files, dependency audit, license and documentation.
 - Use isolated test content for desktop / mobile screenshots and verify keyboard behavior in a browser.
+
+## Copilot login through a real GitLab runner
+
+```sh
+HOOSPEC_TEST_GITLAB_TOKEN_FILE=/protected/local-gitlab-token npm run test:copilot:gitlab
+```
+
+This fixture is restricted to a disposable local GitLab instance (`HOOSPEC_TEST_GITLAB_URL`, default `http://127.0.0.1:8929`). It requires the local isolated project runner named `Hoospec isolated test runner` and a fixture token that can create projects and attach that runner. The token is read from a protected file and never printed.
+
+The test creates a private project, commits the actual login helper and CI template, starts a real API pipeline, reads its challenge from the running job trace, downloads and decrypts its encrypted artifact, and exercises the browser adapter's model list and streamed edit. The fixture project is deleted afterward. GitHub OAuth and Copilot responses are synthetic; this proves the GitLab runner transport and encryption, not real subscription entitlement or inference. Production verification needs an independently registered OAuth App with Device Flow and a consenting Copilot account.
+
+Unit tests additionally verify wrong-tab and wrong-pipeline decryption failures, expiry, tampering, pending/slow-down responses, debug-trace rejection, endpoint restrictions and incomplete generation rejection.

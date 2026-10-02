@@ -11,6 +11,16 @@ try {
   await docker('run', '--detach', '--name', name, '--publish', '127.0.0.1::3000', '--volume', `${volume}:/data/hoospec`, image);
   const container = JSON.parse(await docker('inspect', name))[0];
   assert.equal(container.Config.User, 'node');
+  await docker('exec', name, 'node', '--input-type=module', '-e', `
+    import { CopilotClient } from '@github/copilot-sdk';
+    import { mkdtemp, rm } from 'node:fs/promises';
+    import { tmpdir } from 'node:os';
+    import path from 'node:path';
+    const directory = await mkdtemp(path.join(tmpdir(), 'hoospec-runtime-'));
+    const client = new CopilotClient({ mode: 'empty', baseDirectory: directory, workingDirectory: directory, useLoggedInUser: false, env: { PATH: process.env.PATH, HOME: directory }, logLevel: 'none' });
+    try { await client.start(); await client.ping('Container runtime check'); }
+    finally { await client.stop(); await rm(directory, {recursive: true, force: true}); }
+  `);
   let base;
   async function ready() {
     // Docker may allocate a different ephemeral host port on restart.

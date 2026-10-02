@@ -10,9 +10,10 @@ function fields(value, allowed, label) {
   }
 }
 export function resolvePagesConfig(input = {}, env = {}) {
-  for (const key of Object.keys(input)) if (!['$schema', 'schemaVersion', 'gitlab', 'agent', 'paths'].includes(key)) throw new Error(`Unbekanntes Konfigurationsfeld ${key}.`);
+  for (const key of Object.keys(input)) if (!['$schema', 'schemaVersion', 'gitlab', 'agent', 'paths', 'copilot'].includes(key)) throw new Error(`Unbekanntes Konfigurationsfeld ${key}.`);
   if (input.schemaVersion !== undefined && input.schemaVersion !== 1) throw new Error('Unbekannte Hoospec-Konfigurationsversion.');
-  const gitlab = input.gitlab || {}, agent = input.agent || {}, paths = input.paths || {};
+  const gitlab = input.gitlab || {}, agent = input.agent || {}, paths = input.paths || {}, copilot = input.copilot || {};
+  fields(copilot, ['url', 'clientId'], 'copilot');
   fields(paths, ['specs', 'adrs', 'workspace'], 'paths');
   for (const [key, legacy] of [['specs', 'specDirectory'], ['adrs', 'adrDirectory'], ['workspace', 'directory']]) {
     if (paths[key] !== undefined && gitlab[legacy] !== undefined && paths[key] !== gitlab[legacy]) throw new Error(`paths.${key} und gitlab.${legacy} widersprechen sich. Bitte nur paths.${key} verwenden.`);
@@ -25,6 +26,8 @@ export function resolvePagesConfig(input = {}, env = {}) {
     project: project || 'setup/required', branch: env.NEXT_PUBLIC_GITLAB_BRANCH || gitlab.branch || env.CI_DEFAULT_BRANCH || 'main',
     clientId: env.NEXT_PUBLIC_GITLAB_CLIENT_ID || gitlab.clientId || '', directory: paths.workspace ?? gitlab.directory ?? 'hoospec',
     specDirectory: paths.specs ?? gitlab.specDirectory ?? '', adrDirectory: paths.adrs ?? gitlab.adrDirectory ?? 'docs/adr',
+    copilotClientId: env.NEXT_PUBLIC_HOOSPEC_COPILOT_CLIENT_ID || copilot.clientId || '',
+    copilotUrl: env.NEXT_PUBLIC_HOOSPEC_COPILOT_URL || copilot.url || '',
     agentUrl: env.NEXT_PUBLIC_HOOSPEC_AGENT_URL || agent.url || '', requireMembership: true,
   });
   return { ...normalized, project: project ? normalized.project : '' };

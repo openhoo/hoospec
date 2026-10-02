@@ -1,3 +1,11 @@
+include:
+  - local: tools/hoospec/.gitlab/copilot.yml
+
+hoospec-copilot-login:
+  extends: .hoospec-copilot-login
+  script:
+    - node tools/hoospec/scripts/copilot-login.mjs
+
 # Include this file from the existing project's .gitlab-ci.yml.
 # Add hoospec-build to the existing Pages job's needs (keep its other dependencies).
 # Then append: sh tools/hoospec/scripts/attach-pages.sh public
@@ -26,4 +34,6 @@ hoospec-build:
       - .hoospec-pages/
     expire_in: 1 day
   rules:
+    - if: '$HOOSPEC_COPILOT_LOGIN == "1"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

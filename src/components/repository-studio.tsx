@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, Copy, ExternalLink, GitBranch, Loader2 } from 'lucide-react';
+import { CopilotConnect } from './copilot-connect';
 import { Studio } from './studio';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
@@ -81,8 +82,8 @@ export function RepositoryStudio() {
   function downloadConfig() {
     try {
       const normalized = connectionConfig(config);
-      const { instance, project, branch, clientId, directory, specDirectory, adrDirectory, agentUrl } = normalized;
-      const data = { $schema: './hoospec.config.schema.json', schemaVersion: 1, gitlab: { instance, project, branch, clientId }, paths: { workspace: directory, specs: specDirectory, adrs: adrDirectory }, agent: { url: agentUrl || '' } };
+      const { instance, project, branch, clientId, directory, specDirectory, adrDirectory, agentUrl, copilotUrl, copilotClientId } = normalized;
+      const data = { $schema: './hoospec.config.schema.json', schemaVersion: 1, gitlab: { instance, project, branch, clientId }, paths: { workspace: directory, specs: specDirectory, adrs: adrDirectory }, agent: { url: agentUrl || '' }, copilot: { clientId: copilotClientId || '', url: copilotUrl || '' } };
       const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json' }));
       const link = document.createElement('a'); link.href = url; link.download = 'hoospec.config.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (cause) { setError((cause as Error).message); }
@@ -100,6 +101,7 @@ export function RepositoryStudio() {
       {defaults.project ? <div className="zen-connected-project"><span>Projekt</span><strong>{defaults.project}</strong><small>{defaults.instance}</small></div> : <>{field('instance', 'GitLab-Adresse', 'https://gitlab.example.com')}{field('project', 'Projekt', 'gruppe/projekt oder Projekt-Link')}</>}
       {setup}
       <Button type="submit" disabled={busy || !config.clientId.trim() || !config.project.trim()}>{busy ? <Loader2 size={16} className="animate-spin"/> : <ArrowRight size={16}/>}Mit GitLab anmelden</Button>
+      {backend && <CopilotConnect backend={backend} clientId={config.copilotClientId || ''} onClientId={copilotClientId => setConfig(current => ({ ...current, copilotClientId }))} url={config.copilotUrl || ''} onUrl={copilotUrl => setConfig(current => ({ ...current, copilotUrl }))}/>}
       <details className="zen-repository-options"><summary>Verbindungseinstellungen</summary>
         {field('branch', 'Branch')}{field('directory', 'Hoospec-Verzeichnis')}{field('specDirectory', 'Spec-Verzeichnis', 'Leer: alle .feature-Dateien')}{field('adrDirectory', 'ADR-Verzeichnis')}
         {(!setupOpen || backend) && field('clientId', 'OAuth Application ID')}

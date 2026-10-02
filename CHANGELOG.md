@@ -2,6 +2,10 @@
 
 ## Unreleased — initial release
 
+- Personal Copilot authentication on GitLab Pages through the existing GitLab runner, with no additional server.
+- Browser-bound encrypted login artifacts, direct Copilot model selection and streaming edits, cancellation and memory-only session expiry.
+- Optional official Copilot SDK relay for Node deployments, plus runner setup and compatibility documentation.
+
 - Zen editor for Gherkin specifications and Architecture Decision Records.
 - Hierarchical selections, inline autosave, table shortcuts and undo/redo.
 - Searchable Zen table overview for all specs and ADRs.

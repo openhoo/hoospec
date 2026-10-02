@@ -63,6 +63,8 @@ Restart the server after changing them. `.env.example` lists all supported setti
 
 HooLLM is supported. The optional `dev:hoollm` / `start:hoollm` helpers accept a key from `HOOSPEC_AI_KEY` or protected stdin and use `HOOSPEC_AI_MODEL`; they do not depend on a particular secret manager or local account.
 
+Personal Copilot login can run on GitLab Pages using the existing GitLab runner, without an extra server. Set `copilot.clientId` to your own GitHub OAuth App with Device Flow enabled. The runner returns an encrypted short-lived API credential; AI requests then go directly from the SPA to Copilot. This uses direct Copilot APIs rather than a supported browser SDK; account/app access must be verified. An optional Node SDK relay remains available. See [Copilot setup](docs/gitlab.md#persönlicher-copilot-zugang).
+
 Static GitLab Pages needs a separate agent bridge. [Bridge setup and boundaries](docs/gitlab.md#optional-ai).
 
 ## Run a production server

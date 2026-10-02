@@ -1,0 +1,22 @@
+# Shared template. No npm installation, SDK, client secret or persistent service.
+.hoospec-copilot-login:
+  image: node:24-bookworm-slim
+  # A pipeline with only .pre jobs is rejected as empty by GitLab.
+  # Override this in the host project when it has no deploy stage.
+  stage: deploy
+  before_script: []
+  after_script: []
+  services: []
+  needs: []
+  timeout: 20 minutes
+  interruptible: false
+  cache: []
+  dependencies: []
+  artifacts:
+    paths:
+      - .hoospec-copilot/login.json
+    access: developer
+    expire_in: 10 minutes
+  rules:
+    - if: '$HOOSPEC_COPILOT_LOGIN == "1" && $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - when: never

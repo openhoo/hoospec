@@ -1,3 +1,5 @@
+import { CopilotRunnerConnection } from './copilot-runner';
+import type { CopilotSession } from './copilot-connection';
 import { BrowserDraftStore, MemoryDraftStore, type RepositoryDraftStore } from './repository-draft';
 import type { GitLabAccess } from './gitlab-auth';
 import { GitLabClient, decodeRepositoryFile, normalizeGitLabConfig, repositoryPath, type GitLabConfig, type RepositoryFile, type CommitAction, GitLabError } from './gitlab-client';
@@ -76,6 +78,14 @@ export class GitLabBackend implements StudioBackend {
     const c = this.client.config;
     this.localDraft = draftStore || (typeof window === 'undefined' ? new MemoryDraftStore() : new BrowserDraftStore(JSON.stringify([c.instance, c.project, c.branch, c.directory])));
   }
+  createCopilotLogin(clientId: string) { return new CopilotRunnerConnection(this.client, clientId, this.bridgeFetch); }
+  private copilot?: CopilotSession;
+  get copilotConnection() { return this.copilot; }
+  configureCopilot(connection?: CopilotSession) {
+    if (this.copilot !== connection) { this.copilot?.onDisconnect(() => {}); this.copilot?.disconnect(); this.copilot = connection; }
+    connection?.onDisconnect(() => { this.revision++; if (this.manifest && !this.stopped) this.emit(); });
+    this.revision++; this.emit();
+  }
   private get path() { return `${this.client.config.directory}/workspace.json`; }
   private serialized<T>(work: () => Promise<T>) { const next = this.queue.then(work); this.queue = next.catch(() => {}); return next; }
   private emit() { const state = this.current(); for (const listener of this.listeners) { listener.snapshot(state); listener.connection(true); } return state; }
@@ -92,7 +102,7 @@ export class GitLabBackend implements StudioBackend {
     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(this.client.config.directory));
     return `hoospec/${Array.from(new Uint8Array(hash)).slice(0, 8).map(n => n.toString(16).padStart(2, '0')).join('')}/`;
   }
-  private current() { if (!this.manifest) throw new Error('Repository noch nicht geladen.'); return { ...snapshotOf(this.manifest.workspace, this.revision), aiReady: !!this.client.config.agentUrl && !!this.agentToken, model: this.client.config.agentUrl ? 'Serverseitiger Agent' : '', repository: {
+  private current() { if (!this.manifest) throw new Error('Repository noch nicht geladen.'); return { ...snapshotOf(this.manifest.workspace, this.revision), aiReady: !!this.copilot?.connected || !!this.client.config.agentUrl && !!this.agentToken, model: this.copilot?.connected ? `Copilot · ${this.copilot.model}` : this.client.config.agentUrl ? 'Serverseitiger Agent' : '', repository: {
     project: this.client.config.project, targetBranch: this.client.config.branch, branch: this.publication?.branch || this.review?.source_branch || this.client.config.branch,
     changes: this.changes(), conflict: this.conflict, submissionPending: !!this.publication,
     ...(this.review ? { mergeRequest: { iid: this.review.iid, title: this.review.title, url: this.review.web_url, state: this.review.state } } : {}),
@@ -167,10 +177,12 @@ export class GitLabBackend implements StudioBackend {
     return () => { this.listeners.delete(listener); if (!this.listeners.size && this.timer) { clearInterval(this.timer); this.timer = undefined; } };
   }
   configureAgent(url: string, token: string) {
-    this.client.config.agentUrl = normalizeGitLabConfig({ ...this.client.config, agentUrl: url }).agentUrl;
+    const normalized = normalizeGitLabConfig({ ...this.client.config, agentUrl: url }).agentUrl;
+    this.copilot?.disconnect(); this.copilot = undefined;
+    this.client.config.agentUrl = normalized;
     this.agentToken = token.trim(); this.revision++; this.emit();
   }
-  disconnect() { this.agentToken = ''; this.stopped = true; for (const abort of this.agentRequests) abort.abort(); this.agentRequests.clear(); this.client.disconnect(); if (this.timer) clearInterval(this.timer); this.listeners.clear(); }
+  disconnect() { this.copilot?.disconnect(); this.agentToken = ''; this.stopped = true; for (const abort of this.agentRequests) abort.abort(); this.agentRequests.clear(); this.client.disconnect(); if (this.timer) clearInterval(this.timer); this.listeners.clear(); }
   request(body: Record<string, unknown>): Promise<Snapshot> {
     return this.serialized(async () => {
       if (body.action === 'presence') return this.current();
@@ -319,7 +331,7 @@ export class GitLabBackend implements StudioBackend {
     if (this.publication) return Response.json({ error: 'Bitte zuerst die Einreichung abschließen.' }, { status: 409 });
     if (this.readOnly) return Response.json({ error: 'Du hast auf diesem Branch nur Leserechte.' }, { status: 403 });
     const endpoint = this.client.config.agentUrl;
-    if (!endpoint || !this.agentToken) return Response.json({ error: 'Bitte unter Repository-Verbindung den serverseitigen Agent-Dienst und seinen Zugang einrichten.' }, { status: 503 });
+    if (!this.copilot?.connected && (!endpoint || !this.agentToken)) return Response.json({ error: 'Bitte unter Repository-Verbindung den serverseitigen Agent-Dienst und seinen Zugang einrichten.' }, { status: 503 });
     const fileId = textField(body, 'fileId', 80), version = versionField(body), instruction = textField(body, 'instruction', 4000), actor = textField(body, 'actor', 40);
     const file = fileAt(this.current(), fileId, version), nodeId = textField(body, 'nodeId', 80);
     const node = flattenNodes(parseDocument(file.source, file.filename)).find(item => item.id === nodeId);
@@ -328,7 +340,7 @@ export class GitLabBackend implements StudioBackend {
     const streamSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(150000), ...(signal ? [signal] : [])]);
     let response: Response;
     try {
-      response = await this.bridgeFetch.call(globalThis, endpoint, { method: 'POST', signal: streamSignal, credentials: 'omit', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.agentToken}` }, body: JSON.stringify({ filename: file.filename, source: file.source, nodeId, instruction }) });
+      response = this.copilot?.connected ? await this.copilot.agent({ filename: file.filename, source: file.source, nodeId, instruction }, streamSignal) : await this.bridgeFetch.call(globalThis, endpoint!, { method: 'POST', signal: streamSignal, credentials: 'omit', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.agentToken}` }, body: JSON.stringify({ filename: file.filename, source: file.source, nodeId, instruction }) });
       if (!response.ok) { this.agentRequests.delete(abort); return response; }
       if (!response.body) throw new Error('Die Verbindung zum Agenten wurde unterbrochen.');
     } catch (error) { this.agentRequests.delete(abort); throw error; }

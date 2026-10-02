@@ -14,5 +14,9 @@
     "specs": "features",
     "adrs": "docs/adr",
     "workspace": "hoospec"
+  },
+  "copilot": {
+    "url": "",
+    "clientId": ""
   }
 }

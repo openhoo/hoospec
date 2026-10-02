@@ -6,5 +6,7 @@ export const pagesSettings: GitLabConfig = {
   branch: process.env.NEXT_PUBLIC_GITLAB_BRANCH || 'main',
   clientId: process.env.NEXT_PUBLIC_GITLAB_CLIENT_ID || '',
   directory: 'hoospec', specDirectory: '', adrDirectory: 'docs/adr',
+  copilotClientId: process.env.NEXT_PUBLIC_HOOSPEC_COPILOT_CLIENT_ID || '',
+  copilotUrl: process.env.NEXT_PUBLIC_HOOSPEC_COPILOT_URL || '',
   agentUrl: process.env.NEXT_PUBLIC_HOOSPEC_AGENT_URL || '', requireMembership: true,
 };

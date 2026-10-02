@@ -76,6 +76,22 @@
           "description": "Directory for canonical workspace.json, including history. Must not be empty."
         }
       }
+    },
+    "copilot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Public URL of the Copilot relay, e.g. https://agent.example.com/api/copilot. Never include credentials."
+        },
+        "clientId": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Public client ID of your own GitHub OAuth App with Device Flow enabled. Uses the existing GitLab runner; no extra server required."
+        }
+      }
     }
   },
   "required": [

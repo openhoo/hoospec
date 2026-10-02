@@ -570,3 +570,10 @@ button:focus-visible { outline: 2px solid var(--ring); outline-offset: 5px; bord
   .zen-header:has(.zen-repository-state) .zen-file-picker { max-width: 90px; }
 }
 .zen-review-saved { display: inline-flex; align-items: center; padding: 7px 4px; margin-right: 12px; font-size: 12px; color: var(--muted-foreground); }
+
+.zen-copilot-connect { margin: 1.8rem 0; padding: 1.5rem 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); display: grid; gap: 1rem; }
+.zen-copilot-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.zen-copilot-heading span, .zen-copilot-connect small { font-size: .78rem; color: var(--muted-foreground); }
+.zen-copilot-login { display: grid; gap: .8rem; }
+.zen-copilot-login a, .zen-copilot-login small { display: flex; align-items: center; gap: .5rem; }
+.zen-copilot-connect select { width: 100%; padding: .65rem .8rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font: inherit; }

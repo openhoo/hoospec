@@ -5,6 +5,8 @@ const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',
   trailingSlash: process.env.NEXT_PUBLIC_HOOSPEC_PAGES === 'true',
   devIndicators: false,
+  serverExternalPackages: ['@github/copilot-sdk'],
+  outputFileTracingIncludes: { '/api/copilot': ['./node_modules/@github/copilot-sdk*/**/*', './node_modules/koffi/**/*'] },
   outputFileTracingRoot: process.cwd(),
 };
 
