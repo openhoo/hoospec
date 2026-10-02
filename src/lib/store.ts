@@ -1,3 +1,4 @@
+import { agentConnection } from './agent-connection';
 import { mkdir, readFile, rename, writeFile, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -70,13 +71,14 @@ export function transact<T>(fn: (workspace: Workspace) => T | Promise<T>): Promi
 }
 
 export async function snapshot(): Promise<Snapshot> {
+  const ai = await agentConnection();
   // Reads and initial migration share the same queue as writes.
   const result = state.queue.then(async () => {
     const workspace = await read();
     for (const [id, person] of state.people) if (Date.now() - person.seen > 35000) state.people.delete(id);
     return { ...workspace, history: workspace.history ? Object.fromEntries(Object.entries(workspace.history).map(([id, entry]) => [id, { undo: entry.undo.length, redo: entry.redo.length }])) : undefined, files: workspace.files.map(file => ({ ...file, source: renderDocument(file.document) })),
       changes: workspace.changes.map(change => ({ ...change, before: change.before ? renderDocument(change.before) : '', after: renderDocument(change.after) })),
-      participants: [...state.people.values()], drafts: [...drafts.values()], aiReady: !!process.env.HOOSPEC_AI_KEY && !!process.env.HOOSPEC_AI_MODEL, model: process.env.HOOSPEC_AI_MODEL || '' };
+      participants: [...state.people.values()], drafts: [...drafts.values()], ...ai };
   });
   state.queue = result.catch(() => {});
   return result;

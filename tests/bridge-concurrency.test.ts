@@ -9,7 +9,8 @@ test('simultaneously completed request bodies cannot bypass the bridge concurren
   const token = 'test-only-bridge-concurrency-token-long-enough';
   Object.assign(process.env, { HOOSPEC_PAGES_ORIGIN: 'https://pages.test', HOOSPEC_REPOSITORY_AGENT_TOKEN: token, HOOSPEC_AI_KEY: 'test-only-key', HOOSPEC_AI_MODEL: 'fixture' });
   let providerRequests = 0;
-  globalThis.fetch = async (_url, init) => {
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/models')) return Response.json({data:[{id:'fixture'}]});
     providerRequests++;
     const signal = init!.signal!;
     return new Response(new ReadableStream({ start(controller) { signal.addEventListener('abort', () => controller.close(), { once: true }); } }));

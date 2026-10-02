@@ -577,3 +577,11 @@ button:focus-visible { outline: 2px solid var(--ring); outline-offset: 5px; bord
 .zen-copilot-login { display: grid; gap: .8rem; }
 .zen-copilot-login a, .zen-copilot-login small { display: flex; align-items: center; gap: .5rem; }
 .zen-copilot-connect select { width: 100%; padding: .65rem .8rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font: inherit; }
+
+.zen-command-model { display: flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; margin-top: 4px; color: #87937b; }
+.zen-command-model select { appearance: none; background: transparent; border: 0; border-radius: 4px; padding: 3px 4px 3px 0; color: inherit; font: inherit; font-size: 11px; max-width: min(360px,calc(100vw - 100px)); cursor: pointer; text-overflow: ellipsis; }
+.zen-command-model select:focus-visible { outline: 2px solid #819569; outline-offset: 3px; }
+.zen-command-model select:disabled { cursor: default; opacity: .6; }
+.zen-command-model option { background: #fff; color: #46523d; }
+.dark .zen-command-model { color: #94a485; }
+.dark .zen-command-model option { background: #232a20; color: #c8d8b5; }

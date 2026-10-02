@@ -13,7 +13,7 @@ import { flattenNodes, replaceNode } from './gherkin';
 import { EventStreamDecoder } from './event-stream';
 import { parseDocument, documentKind } from './document';
 import { downloadDocument, type BackendListener, type StudioBackend, type ReviewSession } from './studio-backend';
-import type { Snapshot, Workspace } from './types';
+import type { AIModel, Snapshot, Workspace } from './types';
 
 export type RepositoryManifest = { schemaVersion: 1; workspace: Workspace; paths: Record<string, string> };
 export function parseRepositoryManifest(source: string): RepositoryManifest {
@@ -79,10 +79,35 @@ export class GitLabBackend implements StudioBackend {
     this.localDraft = draftStore || (typeof window === 'undefined' ? new MemoryDraftStore() : new BrowserDraftStore(JSON.stringify([c.instance, c.project, c.branch, c.directory])));
   }
   createCopilotLogin(clientId: string) { return new CopilotRunnerConnection(this.client, clientId, this.bridgeFetch); }
+  private bridgeModels: AIModel[] = [];
+  private bridgeModel = '';
+  private bridgeChecked = 0;
+  private bridgeGeneration = 0;
+  private bridgeProbe?: Promise<void>;
+  private async verifyAgent(force = false) {
+    if (this.copilot?.connected || !this.client.config.agentUrl || !this.agentToken || this.stopped) return;
+    if (this.bridgeProbe) return this.bridgeProbe;
+    if (!force && Date.now() - this.bridgeChecked < 10000) return;
+    const generation = this.bridgeGeneration;
+    const operation = (async () => {
+      let models: AIModel[] = [], model = '';
+      try {
+        const response = await this.bridgeFetch.call(globalThis, this.client.config.agentUrl!, { method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(7000), headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.agentToken}` }, body: JSON.stringify({ action: 'connection' }) });
+        if (response.ok) {
+          const text = await response.text(); if (text.length > 100000) throw new Error();
+          const data = JSON.parse(text);
+          if (data.aiReady === true && Array.isArray(data.aiModels) && data.aiModels.length && data.aiModels.length <= 200 && data.aiModels.every((item: AIModel) => typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 200 && typeof item.name === 'string' && item.name.length <= 200) && data.aiModels.some((item: AIModel) => item.id === data.aiModel)) { models = data.aiModels; model = data.aiModel; }
+        }
+      } catch { /* Addresses and tokens do not establish an AI connection. */ }
+      if (!this.stopped && generation === this.bridgeGeneration) { this.bridgeModels = models; this.bridgeModel = model; this.bridgeChecked = Date.now(); }
+    })();
+    this.bridgeProbe = operation;
+    try { await operation; } finally { if (this.bridgeProbe === operation) this.bridgeProbe = undefined; }
+  }
   private copilot?: CopilotSession;
   get copilotConnection() { return this.copilot; }
   configureCopilot(connection?: CopilotSession) {
-    if (this.copilot !== connection) { this.copilot?.onDisconnect(() => {}); this.copilot?.disconnect(); this.copilot = connection; }
+    if (this.copilot !== connection) { this.copilot?.onDisconnect(() => {}); this.copilot?.disconnect(); this.copilot = connection; this.bridgeGeneration++; this.bridgeChecked = 0; this.bridgeModels = []; this.bridgeModel = ''; this.bridgeProbe = undefined; }
     connection?.onDisconnect(() => { this.revision++; if (this.manifest && !this.stopped) this.emit(); });
     this.revision++; this.emit();
   }
@@ -102,7 +127,7 @@ export class GitLabBackend implements StudioBackend {
     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(this.client.config.directory));
     return `hoospec/${Array.from(new Uint8Array(hash)).slice(0, 8).map(n => n.toString(16).padStart(2, '0')).join('')}/`;
   }
-  private current() { if (!this.manifest) throw new Error('Repository noch nicht geladen.'); return { ...snapshotOf(this.manifest.workspace, this.revision), aiReady: !!this.copilot?.connected || !!this.client.config.agentUrl && !!this.agentToken, model: this.copilot?.connected ? `Copilot · ${this.copilot.model}` : this.client.config.agentUrl ? 'Serverseitiger Agent' : '', repository: {
+  private current() { if (!this.manifest) throw new Error('Repository noch nicht geladen.'); return { ...snapshotOf(this.manifest.workspace, this.revision), aiReady: !!this.copilot?.connected || !!this.bridgeModels.length, aiModels: this.copilot?.connected ? this.copilot.models : this.bridgeModels, aiModel: this.copilot?.connected ? this.copilot.model : this.bridgeModel, model: this.copilot?.connected ? `Copilot · ${this.copilot.model}` : this.bridgeModels.length ? this.bridgeModel : '', repository: {
     project: this.client.config.project, targetBranch: this.client.config.branch, branch: this.publication?.branch || this.review?.source_branch || this.client.config.branch,
     changes: this.changes(), conflict: this.conflict, submissionPending: !!this.publication,
     ...(this.review ? { mergeRequest: { iid: this.review.iid, title: this.review.title, url: this.review.web_url, state: this.review.state } } : {}),
@@ -167,7 +192,7 @@ export class GitLabBackend implements StudioBackend {
     }
     this.restored = true;
   }
-  load(): Promise<Snapshot> { return this.serialized(async () => { await this.refresh(); await this.restoreSession(); await this.saveSession(); return this.emit(); }); }
+  load(): Promise<Snapshot> { return this.serialized(async () => { await this.refresh(); await this.restoreSession(); await this.saveSession(); await this.verifyAgent(); return this.emit(); }); }
   subscribe(listener: BackendListener) {
     this.listeners.add(listener);
     if (this.manifest) { listener.snapshot(this.current()); listener.connection(true); }
@@ -180,9 +205,10 @@ export class GitLabBackend implements StudioBackend {
     const normalized = normalizeGitLabConfig({ ...this.client.config, agentUrl: url }).agentUrl;
     this.copilot?.disconnect(); this.copilot = undefined;
     this.client.config.agentUrl = normalized;
-    this.agentToken = token.trim(); this.revision++; this.emit();
+    this.agentToken = token.trim(); this.bridgeGeneration++; this.bridgeModels = []; this.bridgeModel = ''; this.bridgeChecked = 0; this.bridgeProbe = undefined; this.revision++; this.emit();
+    return this.verifyAgent(true).then(() => { this.revision++; this.emit(); if (!this.bridgeModels.length) throw new Error('Der AI-Dienst ist nicht verbunden. Adresse, Zugang und verfügbare Modelle prüfen.'); });
   }
-  disconnect() { this.copilot?.disconnect(); this.agentToken = ''; this.stopped = true; for (const abort of this.agentRequests) abort.abort(); this.agentRequests.clear(); this.client.disconnect(); if (this.timer) clearInterval(this.timer); this.listeners.clear(); }
+  disconnect() { this.bridgeGeneration++; this.bridgeModels = []; this.bridgeModel = ''; this.copilot?.disconnect(); this.agentToken = ''; this.stopped = true; for (const abort of this.agentRequests) abort.abort(); this.agentRequests.clear(); this.client.disconnect(); if (this.timer) clearInterval(this.timer); this.listeners.clear(); }
   request(body: Record<string, unknown>): Promise<Snapshot> {
     return this.serialized(async () => {
       if (body.action === 'presence') return this.current();
@@ -331,7 +357,9 @@ export class GitLabBackend implements StudioBackend {
     if (this.publication) return Response.json({ error: 'Bitte zuerst die Einreichung abschließen.' }, { status: 409 });
     if (this.readOnly) return Response.json({ error: 'Du hast auf diesem Branch nur Leserechte.' }, { status: 403 });
     const endpoint = this.client.config.agentUrl;
-    if (!this.copilot?.connected && (!endpoint || !this.agentToken)) return Response.json({ error: 'Bitte unter Repository-Verbindung den serverseitigen Agent-Dienst und seinen Zugang einrichten.' }, { status: 503 });
+    if (!this.copilot?.connected && (!endpoint || !this.agentToken || !this.bridgeModels.length)) return Response.json({ error: 'Bitte unter Repository-Verbindung den serverseitigen Agent-Dienst und seinen Zugang einrichten.' }, { status: 503 });
+    const model = body.model === undefined ? this.current().aiModel : body.model;
+    if (typeof model !== 'string' || !this.current().aiModels.some(item => item.id === model)) return Response.json({ error: 'Dieses AI-Modell ist nicht verfügbar.' }, { status: 400 });
     const fileId = textField(body, 'fileId', 80), version = versionField(body), instruction = textField(body, 'instruction', 4000), actor = textField(body, 'actor', 40);
     const file = fileAt(this.current(), fileId, version), nodeId = textField(body, 'nodeId', 80);
     const node = flattenNodes(parseDocument(file.source, file.filename)).find(item => item.id === nodeId);
@@ -340,10 +368,10 @@ export class GitLabBackend implements StudioBackend {
     const streamSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(150000), ...(signal ? [signal] : [])]);
     let response: Response;
     try {
-      response = this.copilot?.connected ? await this.copilot.agent({ filename: file.filename, source: file.source, nodeId, instruction }, streamSignal) : await this.bridgeFetch.call(globalThis, endpoint!, { method: 'POST', signal: streamSignal, credentials: 'omit', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.agentToken}` }, body: JSON.stringify({ filename: file.filename, source: file.source, nodeId, instruction }) });
-      if (!response.ok) { this.agentRequests.delete(abort); return response; }
+      response = this.copilot?.connected ? await this.copilot.agent({ filename: file.filename, source: file.source, nodeId, instruction, model }, streamSignal) : await this.bridgeFetch.call(globalThis, endpoint!, { method: 'POST', signal: streamSignal, credentials: 'omit', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.agentToken}` }, body: JSON.stringify({ filename: file.filename, source: file.source, nodeId, instruction, model }) });
+      if (!response.ok) { if (!this.copilot?.connected && [401, 403, 503].includes(response.status)) { this.bridgeModels = []; this.bridgeModel = ''; this.bridgeChecked = Date.now(); this.revision++; this.emit(); } this.agentRequests.delete(abort); return response; }
       if (!response.body) throw new Error('Die Verbindung zum Agenten wurde unterbrochen.');
-    } catch (error) { this.agentRequests.delete(abort); throw error; }
+    } catch (error) { if (!this.copilot?.connected) { this.bridgeModels = []; this.bridgeModel = ''; this.bridgeChecked = Date.now(); this.revision++; this.emit(); } this.agentRequests.delete(abort); throw error; }
     const encoder = new TextEncoder();
     return new Response(new ReadableStream({
       start: async (controller) => {

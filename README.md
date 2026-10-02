@@ -61,6 +61,8 @@ HOOSPEC_AI_KEY=<server-only-key>
 
 Restart the server after changing them. `.env.example` lists all supported settings. Keys never belong in `NEXT_PUBLIC_*` variables or the public Pages configuration.
 
+The editor shows its AI input only after a successful authenticated model-catalog request. Select a model directly beneath the input. `HOOSPEC_AI_MODEL` sets the default; optional `HOOSPEC_AI_MODELS` is a comma-separated allowlist. The provider must offer an OpenAI-compatible `/models` endpoint. Offline or disconnected sessions retain manual editing.
+
 HooLLM is supported. The optional `dev:hoollm` / `start:hoollm` helpers accept a key from `HOOSPEC_AI_KEY` or protected stdin and use `HOOSPEC_AI_MODEL`; they do not depend on a particular secret manager or local account.
 
 Personal Copilot login can run on GitLab Pages using the existing GitLab runner, without an extra server. Set `copilot.clientId` to your own GitHub OAuth App with Device Flow enabled. The runner returns an encrypted short-lived API credential; AI requests then go directly from the SPA to Copilot. This uses direct Copilot APIs rather than a supported browser SDK; account/app access must be verified. An optional Node SDK relay remains available. See [Copilot setup](docs/gitlab.md#persönlicher-copilot-zugang).

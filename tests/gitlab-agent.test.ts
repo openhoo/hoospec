@@ -5,7 +5,7 @@ import { documentFromSource } from '../src/lib/json-document';
 import { flattenNodes } from '../src/lib/gherkin';
 import { parseDocument } from '../src/lib/document';
 
-function fixture(bridge: typeof fetch) {
+function fixture(bridge: typeof fetch, verify = true) {
   const source = 'Feature: Checkout\n  Scenario: Pay\n    Given a card\n';
   const document = documentFromSource(source, 'checkout.feature');
   const manifest = { schemaVersion: 1, workspace: { schemaVersion: 2, revision: 1, activeFileId: 'checkout', files: [{ id: 'checkout', filename: 'checkout.feature', document, version: 1, reviewed: false }], changes: [], history: {} }, paths: { checkout: 'features/checkout.feature' } };
@@ -15,7 +15,7 @@ function fixture(bridge: typeof fetch) {
     if (String(url).includes('/branches/')) return Response.json({ commit: { id: 'head' }, can_push: true });
     if (String(url).includes('/files/')) return Response.json({ content: Buffer.from(JSON.stringify(manifest)).toString('base64'), size: 1000, encoding: 'base64', last_commit_id: 'head' });
     return Response.json({ permissions: { project_access: { access_level: 40 } } });
-  }, 'fixture-bridge-token', bridge);
+  }, 'fixture-bridge-token', async (url, init) => { if (verify && JSON.parse(String(init?.body)).action === 'connection') return Response.json({aiReady:true, aiModels:[{id:'test-model',name:'Test model'},{id:'second-model',name:'Second model'}],aiModel:'test-model'}); return bridge(url,init); });
   const body = { fileId: 'checkout', version: 1, nodeId: flattenNodes(parseDocument(source, 'checkout.feature')).find(node => node.kind === 'step')!.id, instruction: 'Improve', actor: 'test' };
   return { backend, body, commits: () => commits };
 }
@@ -83,4 +83,15 @@ test('invalid Copilot output cannot overwrite a saved Gherkin document', async (
   await connection.start(); await connection.poll(); backend.configureCopilot(connection);
   const response = await backend.agent(body); assert.match(await response.text(), /event: error/);
   assert.match((await backend.load()).files[0].source, /Given a card/); assert.equal(commits(), 0); backend.disconnect();
+});
+
+test('configured bridge credentials alone never enable AI and unknown models are rejected', async () => {
+  const {backend,body}=fixture(async()=>Response.json({error:'denied'}, {status:401}),false);
+  assert.equal((await backend.load()).aiReady,false);
+  assert.equal((await backend.agent(body)).status,503);backend.disconnect();
+  let chosen='';
+  const connected=fixture(async(_url,init)=>{chosen=JSON.parse(String(init?.body)).model;return new Response('event: complete\ndata: {"replacement":"    Given a better card"}\n\n');});
+  assert.deepEqual((await connected.backend.load()).aiModels?.map(item=>item.id),['test-model','second-model']);
+  assert.equal((await connected.backend.agent({...connected.body,model:'unavailable'})).status,400);
+  await (await connected.backend.agent({...connected.body,model:'second-model'})).text();assert.equal(chosen,'second-model');connected.backend.disconnect();
 });

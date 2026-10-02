@@ -1,3 +1,4 @@
+import { agentModel, invalidateAgentConnection } from './agent-connection';
 import { agentMessages } from './agent-prompt';
 import { replaceNode, sourceOf, type SpecNode } from './gherkin';
 import { EventStreamDecoder } from './event-stream';
@@ -6,8 +7,8 @@ import { parseDocument, documentKind } from './document';
 import { ApiError } from './errors';
 import { alignAgentIndent, normalizeAgentSource } from './agent-output';
 
-export async function generateAgentReplacement(file: { source: string; filename: string }, node: SpecNode, instruction: string, send: (event: string, data: { message?: string; text?: string }) => void, signal: AbortSignal) {
-  const key = process.env.HOOSPEC_AI_KEY, model = process.env.HOOSPEC_AI_MODEL;
+export async function generateAgentReplacement(file: { source: string; filename: string }, node: SpecNode, instruction: string, send: (event: string, data: { message?: string; text?: string }) => void, signal: AbortSignal, requestedModel?: unknown) {
+  const key = process.env.HOOSPEC_AI_KEY, model = await agentModel(requestedModel);
   if (!key || !model) throw new ApiError('Der serverseitige AI-Agent ist noch nicht verbunden.', 503);
   const adr = documentKind(file.filename) === 'adr';
   const base = (process.env.HOOSPEC_AI_BASE_URL || 'https://ai.openhoo.ai/v1').replace(/\/$/, '');
@@ -15,7 +16,8 @@ export async function generateAgentReplacement(file: { source: string; filename:
     method: 'POST', signal, redirect: 'error',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ model, stream: true, messages: agentMessages(file, node, instruction) }),
-  });
+  }).catch(() => { if (!signal.aborted) invalidateAgentConnection(); throw new ApiError('Der AI-Dienst ist nicht erreichbar. Bitte die Verbindung prüfen.', 503); });
+  if ([401, 403, 503].includes(response.status)) invalidateAgentConnection();
   if (!response.ok || !response.body) throw new ApiError(`Der AI-Anbieter hat die Anfrage nicht ausgeführt (HTTP ${response.status}). Bitte die Serverkonfiguration prüfen.`, 502);
   send('status', { message: 'Agent formuliert die Änderung …' });
 

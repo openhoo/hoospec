@@ -12,11 +12,13 @@ const legacySeed = { ...seed, history: { checkout: { undo: [], redo: [] } } };
 await writeFile(path.join(dir, 'workspace.json'), JSON.stringify(legacySeed));
 const base = 'http://127.0.0.1:3411';
 let server;
+const requestedModels = [];
 const mock = createServer(async (req, res) => {
+  if (req.method === 'GET' && req.url === '/models') { res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({data:[{id:'test-model'},{id:'second-test-model'}]})); }
   let text = '';
   for await (const chunk of req) text += chunk;
   const payload = JSON.parse(text);
-  assert.equal(payload.stream, true);
+  assert.equal(payload.stream, true); requestedModels.push(payload.model);
   const message = payload.messages[1].content;
   const request = { request: message.split('Änderungswunsch: ')[1].split('\n\n')[0], selection: { source: message.split(/Ausgewählter Bereich \(.*?\):\n/)[1].split('\n\nÄnderungswunsch:')[0] } };
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -70,6 +72,17 @@ try {
     assert.equal(preflight.status, 204); assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://pages.test');
     const response = await fetch(endpoint, { method: 'POST', headers: { Origin: 'http://pages.test', 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(response.status, 401);
+  });
+  await check('AI catalog confirms connectivity, forwards the chosen model and rejects unknown models', async () => {
+    const state = await json(); assert.equal(state.aiReady,true); assert.deepEqual(state.aiModels.map(item=>item.id),['test-model','second-test-model']);
+    const headers = {Origin:'http://pages.test',Authorization:'Bearer test-only-agent-bridge-token-long-enough','Content-Type':'application/json'};
+    const connection = await fetch(`${base}/api/repository-agent`, {method:'POST',headers,body:JSON.stringify({action:'connection'})});
+    assert.equal((await connection.json()).aiReady,true);
+    const body = {filename:original.filename,source:original.source,nodeId:'step:15',instruction:'Make timing explicit',model:'second-test-model'};
+    const response = await fetch(`${base}/api/repository-agent`,{method:'POST',headers,body:JSON.stringify(body)});
+    assert.ok((await response.text()).includes('event: complete')); assert.equal(requestedModels.at(-1),'second-test-model');
+    const invalid=await fetch(`${base}/api/repository-agent`,{method:'POST',headers,body:JSON.stringify({...body,model:'not-available'})});assert.equal(invalid.status,400);
+    assert.deepEqual((await json()).files,state.files);
   });
   await check('Pages agent streams a validated replacement without touching the server workspace', async () => {
     const before = await json();

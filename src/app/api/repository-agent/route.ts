@@ -1,3 +1,4 @@
+import { agentConnection, agentModel } from '@/lib/agent-connection';
 import { timingSafeEqual } from 'node:crypto';
 import { generateAgentReplacement } from '@/lib/agent-provider';
 import { flattenNodes } from '@/lib/gherkin';
@@ -30,6 +31,8 @@ export async function POST(request: Request) {
     const raw = await readRequestText(request, 1000000);
     let body: Record<string, unknown>;
     try { body = JSON.parse(raw); if (!body || Array.isArray(body) || typeof body !== 'object') throw new Error(); } catch { throw new ApiError('Ungültige Anfrage.'); }
+    if (body.action === 'connection') return Response.json(await agentConnection(), { headers: { ...headers, 'Cache-Control': 'no-store' } });
+    const model = await agentModel(body.model);
     const filename = textField(body, 'filename', 120), source = textField(body, 'source', 200000), instruction = textField(body, 'instruction', 4000);
     if (!/^[\p{L}\p{N}_. -]+\.(feature|md|markdown)$/iu.test(filename)) throw new ApiError('Ungültiger Dateiname.');
     const node = flattenNodes(parseDocument(source, filename)).find(item => item.id === textField(body, 'nodeId', 80));
@@ -47,7 +50,7 @@ export async function POST(request: Request) {
         const send = (event: string, data: unknown) => { try { controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { /* Disconnected browser. */ } };
         try {
           send('status', { message: 'Agent liest die Auswahl …' });
-          const { replacement } = await generateAgentReplacement({ source, filename }, node, instruction, send, abort.signal);
+          const { replacement } = await generateAgentReplacement({ source, filename }, node, instruction, send, abort.signal, model);
           send('complete', { replacement });
         } catch (error) { send('error', { message: error instanceof ApiError ? error.message : 'Der Agent konnte keine gültige Änderung abschließen. Das Repository bleibt erhalten.' }); }
         finally { running--; clearTimeout(timer); abort.abort(); request.signal.removeEventListener('abort', cancel); try { controller.close(); } catch { /* Disconnected. */ } }

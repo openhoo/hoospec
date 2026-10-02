@@ -2,6 +2,8 @@
 
 ## Unreleased — initial release
 
+- Inline AI model selection from the active connection, with authenticated catalog checks and hidden AI input for disconnected or offline sessions.
+
 - Personal Copilot authentication on GitLab Pages through the existing GitLab runner, with no additional server.
 - Browser-bound encrypted login artifacts, direct Copilot model selection and streaming edits, cancellation and memory-only session expiry.
 - Optional official Copilot SDK relay for Node deployments, plus runner setup and compatibility documentation.

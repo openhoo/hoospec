@@ -234,3 +234,11 @@ Der Browser hält nur den kurzlebigen Copilot-API-Zugang im Arbeitsspeicher. Es 
 Für Installationen, die einen Node-Dienst betreiben, bleibt der alternative offizielle SDK-Pfad verfügbar. `copilot.url` kann auf `https://agent.example.com/api/copilot` zeigen. Am Hoospec-Container `HOOSPEC_COPILOT_CLIENT_ID` (eigene App-ID) und `HOOSPEC_PAGES_ORIGIN` (HTTPS-Origin ohne Pfad) konfigurieren. Wenn `copilot.clientId` gesetzt ist, verwendet die SPA den Runner-Pfad. Ohne diese ID kann sie den optionalen Dienst verwenden.
 
 Der SDK-Dienst hält GitHub-Tokens höchstens eine Stunde im Prozessspeicher; der Browser erhält eine zufällige Sitzungskennung. Er unterstützt einen Prozess. Das SDK startet isoliert, ohne Dateizugriff, Shell-Werkzeuge, MCP oder Projektinstruktionen. Für GitLab Pages ist dieser Dienst nicht erforderlich.
+
+### Modellauswahl und Verbindungsstatus
+
+Im Editor steht die Modellauswahl direkt unter der AI-Eingabe. Sie verwendet die freigegebene Modellliste der aktiven Copilot- oder Agent-Verbindung; die Wahl gilt für die nächste Anfrage dieser Person und verändert nicht den Workspace anderer Teammitglieder. Unbekannte Modelle werden vor der Generierung abgelehnt.
+
+Die Eingabe und der `/`-Kurzbefehl stehen nur bei bestätigter AI-Verbindung zur Verfügung. Ohne Verbindung, bei Trennung, abgelaufenem Copilot-Zugang, fehlenden Schreibrechten oder offline bleiben sie ausgeblendet; Doppelklick und manuelle Bearbeitung funktionieren weiterhin.
+
+Für einen separaten Agent-Dienst prüft Hoospec zunächst den authentifizierten Verbindungsstatus und Modellkatalog. Auch der Node-Modus prüft den Anbieter über dessen OpenAI-kompatiblen `/models`-Endpunkt; nur eingetragene Zugangsdaten reichen nicht. Der Status wird kurz zwischengespeichert und regelmäßig erneut geprüft. `HOOSPEC_AI_MODELS` begrenzt die Modellauswahl optional als kommagetrennte Liste, `HOOSPEC_AI_MODEL` legt die Vorauswahl fest. Ein älterer Agent-Dienst muss für die neue Statusabfrage aktualisiert werden.

@@ -39,6 +39,12 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
   const [workspace, setWorkspace] = useState<Snapshot | null>(null);
   const readOnly = backend.readOnly === true || workspace?.repository?.submissionPending === true;
   const [connected, setConnected] = useState(false);
+  const [browserOnline, setBrowserOnline] = useState(true);
+  useEffect(() => {
+    const update = () => setBrowserOnline(navigator.onLine); update();
+    window.addEventListener('online', update); window.addEventListener('offline', update);
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update); };
+  }, []);
   const [identity, setIdentity] = useState({ id: '', name: 'Gast' });
   const [selection, setSelectionState] = useState<Selection | null>(null);
   const [hoverId, setHoverIdState] = useState<string | null>(null);
@@ -51,6 +57,10 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
   const tableMutation = useRef(false);
   const historyMutation = useRef(false);
   const [instruction, setInstruction] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const aiAvailable = connected && browserOnline && workspace?.aiReady === true && !readOnly;
+  const aiModels = workspace?.aiModels || [];
+  const aiModel = aiModels.find(item => item.id === selectedModel)?.id || workspace?.aiModel || aiModels[0]?.id || '';
   const [inlineEdit, setInlineEdit] = useState<{ node: SpecNode; file: SpecFile; mode: InlineMode; cell?: TableCell } | null>(null);
   const [busy, setBusy] = useState(false);
   const agentRequest = useRef<AbortController | null>(null);
@@ -278,7 +288,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
         return;
       }
       if (event.key === 'Escape' && !busy && !tools && !filesOpen && !changeView) { setSelection(null); setHoverId(null); setInstruction(''); command.current?.blur(); }
-      if (event.key === '/' && !typing && target && !tools && !filesOpen && !changeView) { event.preventDefault(); pin(target); }
+      if (event.key === '/' && aiAvailable && !typing && target && !tools && !filesOpen && !changeView) { event.preventDefault(); pin(target); }
       if (event.altKey && event.key === 'ArrowUp' && target && !typing && !tools && !filesOpen && !changeView && !busy) {
         event.preventDefault();
         const parent = [...nodes].reverse().find(n => n.id !== target.id && n.start <= target.start && n.end >= target.end);
@@ -291,7 +301,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
     };
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
-  }, [target, pin, nodes, viewFile, changeView, busy, tools, filesOpen, inlineEdit, restore, hoveredRow, file, changeTableRow, changeNode, overview, setSelection, setHoverId, startInline, suspended, repositoryOpen]);
+  }, [target, pin, nodes, viewFile, changeView, busy, tools, filesOpen, inlineEdit, restore, hoveredRow, file, changeTableRow, changeNode, overview, setSelection, setHoverId, startInline, suspended, repositoryOpen, aiAvailable]);
 
   async function mutate(body: Record<string, unknown>, message?: string) {
     if (readOnly && body.action !== 'navigate') { setError('Du hast auf diesem Branch nur Leserechte.'); return null; }
@@ -324,7 +334,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
     if (follow) await mutate({ action: 'navigate', fileId: id });
   }
   async function runAgent() {
-    if (readOnly || !file || !target || !instruction.trim() || busy || draft || pending) return;
+    if (!aiAvailable || !aiModel || !file || !target || !instruction.trim() || busy || draft || pending) return;
     let latest = file;
     try { if (inlineEdit && inlineFlush.current) latest = await inlineFlush.current(); } catch { return; }
     const currentNode = resolveNode(target, viewFile?.source || file.source, latest.source, latest.filename, inlineEdit?.node.id === target.id);
@@ -336,7 +346,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
     setLocalDraft(initial);
     const abort = new AbortController(); agentRequest.current = abort;
     try {
-      const response = await backend.agent({ fileId: chosen.file.id, version: chosen.file.version, nodeId: chosen.node.id, instruction: instruction.trim(), actor: identity.name }, abort.signal);
+      const response = await backend.agent({ fileId: chosen.file.id, version: chosen.file.version, nodeId: chosen.node.id, instruction: instruction.trim(), actor: identity.name, model: aiModel }, abort.signal);
       if (!response.ok) throw new Error((await response.json()).error);
       if (!response.body) throw new Error('Verbindung zum Agenten unterbrochen.');
       const reader = response.body.getReader(), decoder = new TextDecoder();
@@ -354,7 +364,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
         if (done) break;
       } } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
       if (!complete) throw new Error('Verbindung unterbrochen. Bitte den gespeicherten Stand prüfen.');
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { setError((e as Error).message); void backend.load().then(accept).catch(() => {}); }
     finally { if (agentRequest.current === abort) agentRequest.current = null; setBusy(false); setLocalDraft(null); }
   }
   async function openSource(format: 'source' | 'json') {
@@ -456,10 +466,10 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
     <main ref={scroll} className="zen-canvas" onPointerLeave={() => { setHoverId(null); setHoveredRow(null); }}>{overview && workspace ? <DocumentOverview files={workspace.files} disabled={busy || pending} readOnly={readOnly} onOpen={id => void navigate(id)} onCreate={kind => void openNew(kind)}/> : preview.tree && file ? <article key={file.id} className="zen-document">{renderNode(preview.tree)}</article> : <div className="zen-loading" role="status">{workspace && !workspace.files.length ? <><span>Noch keine Specs oder ADRs.</span><button onClick={() => void openNew('feature')}>Neue Spec</button><button onClick={() => void openNew('adr')}>Neue ADR</button></> : error ? <><span>{error}</span><button onClick={() => location.reload()}>Erneut verbinden</button></> : <><Loader2 size={24} className="animate-spin"/>{connected ? 'Dokumente werden geladen …' : 'Verbindung wird hergestellt …'}</>}</div>}<div className="zen-bottom-space"/></main>
     {!overview && box && !tools && !filesOpen && !pending && <div className={`zen-outline ${draft ? 'zen-working' : ''} ${selection ? 'zen-pinned' : ''}`} style={box}><span className="zen-outline-label">{draft ? <><Sparkles size={11}/> {draft.phase === 'validating' ? 'Prüfen …' : 'Wird geändert …'}</> : target ? labels[target.kind] : ''}</span></div>}
 
-    {!overview && (target || draft) && !tools && !filesOpen && <div className={`zen-command ${busy || draft ? 'is-working' : ''}`}><form onSubmit={event => { event.preventDefault(); runAgent(); }}><Input ref={command} aria-label="Was soll sich ändern?" placeholder={readOnly ? 'Du hast auf diesem Branch nur Leserechte.' : 'Was soll sich ändern?'} value={instruction} maxLength={4000} disabled={readOnly || busy || (!!draft && !localDraft)} onFocus={() => { if (!interaction.current.selection && scopedTarget && viewFile) setSelection({ node: scopedTarget, file: structuredClone(viewFile) }); }} onChange={event => setInstruction(event.target.value)} className="zen-command-input"/>{scopedTarget && <button type="button" className="zen-command-clear" aria-label="Auswahl aufheben" disabled={readOnly || busy || !!draft} onClick={clearFocus}><X size={14}/></button>}<Button type="submit" size="icon" aria-label="Änderung umsetzen" disabled={readOnly || pending || busy || !!draft || !instruction.trim()} className="zen-send">{busy || draft ? <Loader2 size={17} className="animate-spin"/> : <ArrowUp size={18}/>}</Button></form>{error && <p className="zen-command-error" role="alert">{error}</p>}</div>}
-    {!overview && !target && !draft && !tools && !filesOpen && <p className="zen-quiet-hint">Zeige auf eine Stelle. <kbd>/</kbd> Sag, was sich ändern soll.</p>}
+    {aiAvailable && !overview && (target || draft) && !tools && !filesOpen && <div className={`zen-command ${busy || draft ? 'is-working' : ''}`}><form onSubmit={event => { event.preventDefault(); runAgent(); }}><Input ref={command} aria-label="Was soll sich ändern?" placeholder={readOnly ? 'Du hast auf diesem Branch nur Leserechte.' : 'Was soll sich ändern?'} value={instruction} maxLength={4000} disabled={readOnly || busy || (!!draft && !localDraft)} onFocus={() => { if (!interaction.current.selection && scopedTarget && viewFile) setSelection({ node: scopedTarget, file: structuredClone(viewFile) }); }} onChange={event => setInstruction(event.target.value)} className="zen-command-input"/>{scopedTarget && <button type="button" className="zen-command-clear" aria-label="Auswahl aufheben" disabled={readOnly || busy || !!draft} onClick={clearFocus}><X size={14}/></button>}<Button type="submit" size="icon" aria-label="Änderung umsetzen" disabled={readOnly || pending || busy || !!draft || !instruction.trim()} className="zen-send">{busy || draft ? <Loader2 size={17} className="animate-spin"/> : <ArrowUp size={18}/>}</Button></form>{aiModels.length > 0 && <div className="zen-command-model"><select aria-label="AI-Modell" value={aiModel} disabled={busy || !!draft || pending} onChange={event => setSelectedModel(event.target.value)}>{aiModels.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><ChevronDown size={12} aria-hidden="true"/></div>}{error && <p className="zen-command-error" role="alert">{error}</p>}</div>}
+    {aiAvailable && !overview && !target && !draft && !tools && !filesOpen && <p className="zen-quiet-hint">Zeige auf eine Stelle. <kbd>/</kbd> Sag, was sich ändern soll.</p>}
     {notice && <div className="zen-toast" role="status"><Check size={14}/>{notice}</div>}
-    {error && !!file && (!target || !!inlineEdit) && !tools && <div className="zen-error-toast" role="alert">{error}<button aria-label="Meldung schließen" onClick={() => setError('')}><X size={14}/></button></div>}
+    {error && !!file && (!aiAvailable || !target || !!inlineEdit) && !tools && <div className="zen-error-toast" role="alert">{error}<button aria-label="Meldung schließen" onClick={() => setError('')}><X size={14}/></button></div>}
 
     {backend.repository && workspace?.repository && <RepositoryReviewDialog open={repositoryOpen} onOpenChange={setRepositoryOpen} backend={backend} state={workspace.repository} accept={accept}/>}
     <Dialog open={filesOpen} onOpenChange={setFilesOpen}><DialogContent className="zen-files-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Deine Dokumente</DialogTitle><DialogDescription>Specs und Entscheidungen. Gemeinsam.</DialogDescription></DialogHeader>

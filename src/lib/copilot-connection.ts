@@ -57,8 +57,10 @@ export class CopilotConnection {
   }
   async agent(body: Record<string, unknown>, signal?: AbortSignal) {
     if (!this.ready) return Response.json({ error: 'Bitte erneut mit Copilot verbinden.' }, { status: 401 });
-    const response = await this.request({ ...body, action: 'agent', model: this.model }, signal);
-    if (response.status === 401) this.disconnect();
+    const model = body.model === undefined ? this.model : body.model;
+    if (!this.models.some(item => item.id === model)) return Response.json({ error: 'Dieses Copilot-Modell ist nicht verfügbar.' }, { status: 400 });
+    const response = await this.request({ ...body, action: 'agent', model }, signal).catch(error => { if (!signal?.aborted) this.disconnect(); throw error; });
+    if ([401, 403].includes(response.status)) this.disconnect();
     return response;
   }
   disconnect() {

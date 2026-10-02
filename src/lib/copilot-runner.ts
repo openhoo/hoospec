@@ -98,16 +98,17 @@ export class CopilotRunnerConnection implements CopilotSession {
   }
   private api(path: string, init?: RequestInit) {
     if (!this.credential || this.credential.expires <= Date.now()) { this.disconnect(); throw new Error('Copilot-Anmeldung abgelaufen. Bitte erneut verbinden.'); }
-    return this.fetcher.call(globalThis, copilotEndpoint(this.credential.endpoint) + path, { ...init, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(150000), ...(init?.signal ? [init.signal] : [])]), headers: { Authorization: `Bearer ${this.credential.token}`, Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json', 'X-Initiator': 'user' } : {}) } });
+    return this.fetcher.call(globalThis, copilotEndpoint(this.credential.endpoint) + path, { ...init, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(150000), ...(init?.signal ? [init.signal] : [])]), headers: { Authorization: `Bearer ${this.credential.token}`, Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json', 'X-Initiator': 'user' } : {}) } }).catch(error => { if (!init?.signal?.aborted && !this.abort.signal.aborted) this.disconnect(); throw error; });
   }
   async agent(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
     if (!this.connected) return Response.json({ error: 'Bitte erneut mit Copilot verbinden.' }, { status: 401 });
     const file = { source: String(body.source), filename: String(body.filename) };
     const node = flattenNodes(parseDocument(file.source, file.filename)).find(item => item.id === body.nodeId);
-    if (!node || !this.models.some(item => item.id === this.model)) throw new Error('Ungültige Auswahl oder Copilot-Modell.');
-    const response = await this.api('/chat/completions', { method: 'POST', signal, body: JSON.stringify({ model: this.model, stream: true, messages: agentMessages(file, node, String(body.instruction)) }) });
+    const model = body.model === undefined ? this.model : body.model;
+    if (!node || !this.models.some(item => item.id === model)) throw new Error('Ungültige Auswahl oder Copilot-Modell.');
+    const response = await this.api('/chat/completions', { method: 'POST', signal, body: JSON.stringify({ model, stream: true, messages: agentMessages(file, node, String(body.instruction)) }) });
     if (!response.ok) {
-      if (response.status === 401) this.disconnect();
+      if ([401, 403].includes(response.status)) this.disconnect();
       return Response.json({ error: `Copilot konnte die Änderung nicht ausführen (HTTP ${response.status}).${response.status === 401 ? ' Bitte erneut verbinden.' : ''}` }, {status: response.status});
     }
     if (!response.body) throw new Error('Copilot hat keinen Antwortstrom geliefert.');

@@ -15,4 +15,5 @@ export type RepositoryReview = {
   changes: { filename: string; path: string; before: string; after: string }[];
   mergeRequest?: { iid: number; title: string; url: string; state: string };
 };
-export type Snapshot = Omit<Workspace, 'files' | 'changes' | 'history'> & { history?: Record<string, { undo: number; redo: number }>; files: SpecFile[]; changes: Change[]; participants: Participant[]; drafts: LiveDraft[]; aiReady: boolean; model: string; repository?: RepositoryReview };
+export type AIModel = { id: string; name: string };
+export type Snapshot = Omit<Workspace, 'files' | 'changes' | 'history'> & { history?: Record<string, { undo: number; redo: number }>; files: SpecFile[]; changes: Change[]; participants: Participant[]; drafts: LiveDraft[]; aiReady: boolean; model: string; aiModels?: AIModel[]; aiModel?: string; repository?: RepositoryReview };

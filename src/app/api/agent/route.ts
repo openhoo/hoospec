@@ -1,3 +1,4 @@
+import { agentModel } from '@/lib/agent-connection';
 import { flattenNodes } from '@/lib/gherkin';
 import { generateAgentReplacement } from '@/lib/agent-provider';
 import { parseDocument, documentKind } from '@/lib/document';
@@ -17,8 +18,7 @@ export async function POST(request: Request) {
     const fileId = textField(body, 'fileId', 80), actor = textField(body, 'actor', 40);
     const instruction = textField(body, 'instruction', 4000), version = versionField(body);
     const nodeId = textField(body, 'nodeId', 80);
-    const key = process.env.HOOSPEC_AI_KEY, model = process.env.HOOSPEC_AI_MODEL;
-    if (!key || !model) throw new ApiError('Der AI-Agent ist noch nicht verbunden. Bitte die AI-Verbindung für dieses Studio einrichten lassen. Du kannst die Spec bereits direkt bearbeiten.', 503);
+    const model = await agentModel(body.model);
     if (active.has(fileId)) throw new ApiError('Für diese Spec arbeitet bereits ein Agent. Bitte kurz warten.', 409);
     const file = fileAt(await snapshot(), fileId, version);
     const node = flattenNodes(parseDocument(file.source, file.filename)).find(n => n.id === nodeId);
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
               output += data.text;
               updateDraft({ fileId, nodeId, version, actor, text: previewAgentSource(output, adr ? 'markdown' : 'gherkin'), phase: 'writing' });
             }
-          }, abort.signal);
+          }, abort.signal, model);
           updateDraft({ fileId, nodeId, version, actor, text: replacement, phase: 'validating' });
           stage = 'save';
           await transact(current => {
