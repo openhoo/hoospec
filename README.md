@@ -77,12 +77,14 @@ The start script runs the Standalone server and serves its assets. It binds to `
 ### Docker
 
 ```sh
-docker build -t hoospec:local .
+docker pull ghcr.io/openhoo/hoospec:latest
 docker run --rm --name hoospec \
   -p 127.0.0.1:3410:3000 \
   -v hoospec-data:/data/hoospec \
-  hoospec:local
+  ghcr.io/openhoo/hoospec:latest
 ```
+
+Images are published to `ghcr.io/openhoo/hoospec` after all CI checks and the container persistence test pass on `main`. Use `latest` for the most recent verified main build, or `sha-<full-commit-sha>` to pin a specific revision. The published image currently targets Linux amd64. To build locally instead, run `docker build -t hoospec:local .`.
 
 The container runs as a non-root user. Use a named volume for persistence; existing bind mounts must be writable by the container's `node` user. Inject AI variables at runtime. The build downloads dependencies and the Geist fonts, so it requires network access.
 

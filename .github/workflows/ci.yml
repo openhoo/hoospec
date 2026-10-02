@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -45,6 +45,10 @@ jobs:
           HOOSPEC_REPOSITORY_AGENT_TOKEN: test-only-bridge-secret-that-must-never-be-exported
         run: npm run build:pages && npm run test:pages
   container:
+    needs: verify
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -54,5 +58,30 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - run: docker build --tag hoospec:ci .
+      - name: Build container
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          docker build --tag hoospec:ci \
+            --label "org.opencontainers.image.source=https://github.com/$SOURCE_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$SOURCE_REVISION" \
+            --label "org.opencontainers.image.licenses=Apache-2.0" .
       - run: node scripts/test-container.mjs hoospec:ci
+      - name: Publish tested image to GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${SOURCE_REPOSITORY,,}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker tag hoospec:ci "$image:sha-$SOURCE_REVISION"
+          docker push "$image:sha-$SOURCE_REVISION"
+          docker tag hoospec:ci "$image:latest"
+          docker push "$image:latest"
+          echo "Published: $image:sha-$SOURCE_REVISION" >> "$GITHUB_STEP_SUMMARY"
