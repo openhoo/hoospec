@@ -10,25 +10,32 @@ function fields(value, allowed, label) {
   }
 }
 export function resolvePagesConfig(input = {}, env = {}) {
-  for (const key of Object.keys(input)) if (!['$schema', 'schemaVersion', 'gitlab', 'agent'].includes(key)) throw new Error(`Unbekanntes Konfigurationsfeld ${key}.`);
+  for (const key of Object.keys(input)) if (!['$schema', 'schemaVersion', 'gitlab', 'agent', 'paths'].includes(key)) throw new Error(`Unbekanntes Konfigurationsfeld ${key}.`);
   if (input.schemaVersion !== undefined && input.schemaVersion !== 1) throw new Error('Unbekannte Hoospec-Konfigurationsversion.');
-  const gitlab = input.gitlab || {}, agent = input.agent || {};
+  const gitlab = input.gitlab || {}, agent = input.agent || {}, paths = input.paths || {};
+  fields(paths, ['specs', 'adrs', 'workspace'], 'paths');
+  for (const [key, legacy] of [['specs', 'specDirectory'], ['adrs', 'adrDirectory'], ['workspace', 'directory']]) {
+    if (paths[key] !== undefined && gitlab[legacy] !== undefined && paths[key] !== gitlab[legacy]) throw new Error(`paths.${key} und gitlab.${legacy} widersprechen sich. Bitte nur paths.${key} verwenden.`);
+  }
   fields(gitlab, ['instance', 'project', 'branch', 'clientId', 'directory', 'specDirectory', 'adrDirectory'], 'gitlab');
   fields(agent, ['url'], 'agent');
   const project = env.NEXT_PUBLIC_GITLAB_PROJECT || gitlab.project || env.CI_PROJECT_PATH || '';
   const normalized = normalizeGitLabConfig({
     instance: env.NEXT_PUBLIC_GITLAB_URL || gitlab.instance || env.CI_SERVER_URL || 'https://gitlab.com',
     project: project || 'setup/required', branch: env.NEXT_PUBLIC_GITLAB_BRANCH || gitlab.branch || env.CI_DEFAULT_BRANCH || 'main',
-    clientId: env.NEXT_PUBLIC_GITLAB_CLIENT_ID || gitlab.clientId || '', directory: gitlab.directory || 'hoospec',
-    specDirectory: gitlab.specDirectory || '', adrDirectory: gitlab.adrDirectory ?? 'docs/adr',
+    clientId: env.NEXT_PUBLIC_GITLAB_CLIENT_ID || gitlab.clientId || '', directory: paths.workspace ?? gitlab.directory ?? 'hoospec',
+    specDirectory: paths.specs ?? gitlab.specDirectory ?? '', adrDirectory: paths.adrs ?? gitlab.adrDirectory ?? 'docs/adr',
     agentUrl: env.NEXT_PUBLIC_HOOSPEC_AGENT_URL || agent.url || '', requireMembership: true,
   });
   return { ...normalized, project: project ? normalized.project : '' };
 }
 export async function readPagesConfig(root, env = process.env) {
   let input = {};
-  try { input = JSON.parse(await readFile(path.join(root, 'hoospec.config.json'), 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw new Error('hoospec.config.json ist ungültig. Bitte Syntax und öffentliche Felder prüfen.'); }
+  const locations = [...new Set([...(env.CI_PROJECT_DIR ? [path.join(env.CI_PROJECT_DIR, 'hoospec.config.json')] : []), path.join(root, 'hoospec.config.json')])];
+  for (const location of locations) {
+    try { input = JSON.parse(await readFile(location, 'utf8')); break; }
+    catch (error) { if (error.code !== 'ENOENT') throw new Error('hoospec.config.json ist ungültig. Bitte Syntax und öffentliche Felder prüfen.'); }
+  }
   return resolvePagesConfig(input, env);
 }
 export function pagesPath(value = '') {

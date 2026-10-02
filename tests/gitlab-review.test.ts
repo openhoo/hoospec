@@ -4,7 +4,7 @@ import { GitLabBackend } from '../src/lib/gitlab-backend';
 import { MemoryDraftStore, type RepositoryDraftStore } from '../src/lib/repository-draft';
 import { documentFromSource } from '../src/lib/json-document';
 
-function fixture() {
+function fixture(paths: { specDirectory?: string; adrDirectory?: string } = {}) {
   const source = 'Feature: Checkout\n  Scenario: Pay\n    Given a card\n';
   const manifest = { schemaVersion: 1, workspace: { schemaVersion: 2, revision: 1, activeFileId: 'checkout', files: [{ id: 'checkout', filename: 'checkout.feature', document: documentFromSource(source, 'checkout.feature'), version: 1, reviewed: false }], changes: [], history: {} }, paths: { checkout: 'features/checkout.feature' } };
   const branches = new Map([['main', 'initial']]);
@@ -41,7 +41,7 @@ function fixture() {
     if (url.pathname.endsWith('/merge_requests')) return Response.json(mrs.filter(mr => mr.state === 'opened' && (!url.searchParams.get('source_branch') || mr.source_branch === url.searchParams.get('source_branch'))));
     return Response.json({ permissions: { project_access: { access_level: role } } });
   };
-  const create = (draftStore?: RepositoryDraftStore) => new GitLabBackend({ instance: 'https://gitlab.test', project: 'group/project', branch: 'main', directory: 'hoospec', specDirectory: '', adrDirectory: '', clientId: '', requireMembership: true }, 'test-token', fetcher, '', fetch, draftStore);
+  const create = (draftStore?: RepositoryDraftStore) => new GitLabBackend({ instance: 'https://gitlab.test', project: 'group/project', branch: 'main', directory: 'hoospec', specDirectory: '', adrDirectory: '', clientId: '', requireMembership: true, ...paths }, 'test-token', fetcher, '', fetch, draftStore);
   const save = (backend: GitLabBackend, version: number, label: string) => backend.request({ action: 'save', fileId: 'checkout', version, source: source.replace('a card', label), actor: 'Test' });
   return { create, save, requests, branches, mrs, source, failMr: (value: boolean) => { failMr = value; }, loseCommit: () => { lostCommitResponse = true; }, rejectCommit: (value: boolean) => { rejectCommit = value; }, role: (value: number) => { role = value; } };
 }
@@ -157,4 +157,18 @@ test('keeping a local draft preserves other documents added by collaborators', a
   assert.match(resolved.files.find(file => file.id === 'checkout')!.source, /a local card/);
   assert.ok(resolved.files.some(file => file.filename === '0001-team.md')); await two.repository.submit('Keep local feature');
   assert.equal(f.mrs.length, 1); one.disconnect(); two.disconnect();
+});
+
+test('new documents use configured output directories in the MR and existing paths stay unchanged', async () => {
+  const f = fixture({ specDirectory: 'acceptance', adrDirectory: 'architecture/decisions' });
+  const backend = f.create(); await backend.load();
+  await backend.request({ action: 'import', actor: 'Test', filename: 'new.feature', source: 'Feature: New\n  Scenario: First\n    Given a condition\n' });
+  await backend.request({ action: 'import', actor: 'Test', filename: 'choice.md', source: '# Choice\n' });
+  await backend.repository.submit('Add documents');
+  const actions = f.requests.find(body => body.actions)!.actions as { file_path: string; content: string }[];
+  assert.ok(actions.some(action => action.file_path === 'acceptance/new.feature'));
+  assert.ok(actions.some(action => action.file_path === 'architecture/decisions/choice.md'));
+  const manifest = JSON.parse(actions.find(action => action.file_path === 'hoospec/workspace.json')!.content);
+  assert.equal(manifest.paths.checkout, 'features/checkout.feature');
+  assert.equal(f.branches.get('main'), 'initial'); backend.disconnect();
 });

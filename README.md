@@ -36,6 +36,8 @@ The interface currently uses German labels. [Editor shortcuts and workflow](docs
 npm run install:gitlab -- /path/to/existing/project
 ```
 
+Configure repository-relative document locations in `hoospec.config.json`: `paths.specs` for Gherkin files, `paths.adrs` for architecture decisions, and `paths.workspace` for canonical JSON. During GitLab CI, a config at the repository root takes precedence over the embedded config. Existing document paths are preserved. See [repository configuration](docs/gitlab.md#ablageorte-im-repository).
+
 This copies Hoospec to `tools/hoospec/`. Add the provided CI include and attach step to your existing Pages job. Hoospec appears at `/hoospec/`, alongside the existing website, and edits the same repository.
 
 **[Installation guide and complete CI example](docs/gitlab.md)**

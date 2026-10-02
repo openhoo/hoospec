@@ -5,21 +5,80 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
-    "schemaVersion": { "const": 1 },
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
     "gitlab": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "instance": { "type": "string", "maxLength": 1024 },
-        "project": { "type": "string", "maxLength": 512 },
-        "branch": { "type": "string", "maxLength": 255 },
-        "clientId": { "type": "string", "maxLength": 1024 },
-        "directory": { "type": "string", "default": "hoospec" },
-        "specDirectory": { "type": "string", "default": "" },
-        "adrDirectory": { "type": "string", "default": "docs/adr" }
+        "instance": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "project": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "clientId": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "directory": {
+          "type": "string",
+          "default": "hoospec"
+        },
+        "specDirectory": {
+          "type": "string",
+          "default": ""
+        },
+        "adrDirectory": {
+          "type": "string",
+          "default": "docs/adr"
+        }
       }
     },
-    "agent": { "type": "object", "additionalProperties": false, "properties": { "url": { "type": "string", "maxLength": 1024 } } }
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Repository-relative directories. Existing documents keep their paths; these directories control discovery and new generated files.",
+      "properties": {
+        "specs": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Gherkin search and output directory. Empty string searches the whole repository and creates new specs at its root."
+        },
+        "adrs": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "ADR search and output directory. Empty string disables ADR discovery and creates new ADRs at the repository root."
+        },
+        "workspace": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Directory for canonical workspace.json, including history. Must not be empty."
+        }
+      }
+    }
   },
-  "required": ["schemaVersion"]
+  "required": [
+    "schemaVersion"
+  ]
 }

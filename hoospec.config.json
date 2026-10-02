@@ -5,10 +5,14 @@
     "instance": "",
     "project": "",
     "branch": "",
-    "clientId": "",
-    "directory": "hoospec",
-    "specDirectory": "",
-    "adrDirectory": "docs/adr"
+    "clientId": ""
   },
-  "agent": { "url": "" }
+  "agent": {
+    "url": ""
+  },
+  "paths": {
+    "specs": "features",
+    "adrs": "docs/adr",
+    "workspace": "hoospec"
+  }
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolvePagesConfig, pagesPath } from '../scripts/pages-config.mjs';
+import { resolvePagesConfig, readPagesConfig, pagesPath } from '../scripts/pages-config.mjs';
 import { GitLabOAuthAccess } from '../src/lib/gitlab-auth';
 import { GitLabBackend } from '../src/lib/gitlab-backend';
 import { GitLabClient, normalizeGitLabConfig } from '../src/lib/gitlab-client';
@@ -112,4 +112,26 @@ test('embedding preserves the existing website and refuses collisions or symlink
     await symlink(path.join(root, 'public'), path.join(root, 'linked-public'));
     await assert.rejects(run('sh', [path.resolve('scripts/attach-pages.sh'), 'linked-public'], { cwd: root }));
   } finally { await rm(root, { recursive: true }); }
+});
+
+test('repository paths support independent output directories and reject ambiguous or unsafe settings', () => {
+  const result = resolvePagesConfig({ paths: { specs: 'acceptance/features', adrs: 'architecture/decisions', workspace: '.hoospec-data' } });
+  assert.equal(result.specDirectory, 'acceptance/features');
+  assert.equal(result.adrDirectory, 'architecture/decisions');
+  assert.equal(result.directory, '.hoospec-data');
+  assert.equal(resolvePagesConfig({ paths: { specs: '', adrs: '' } }).specDirectory, '');
+  for (const paths of [{ specs: '../outside' }, { adrs: 'docs/../outside' }, { workspace: '' }, { secret: 'no' }]) assert.throws(() => resolvePagesConfig({ paths }));
+  assert.throws(() => resolvePagesConfig({ paths: { specs: 'features' }, gitlab: { specDirectory: 'specs' } }), /widersprechen/);
+});
+test('Pages prefers project-root config and falls back to the embedded config only when absent', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hoospec-config-'));
+  try {
+    const embedded = path.join(root, 'tools/hoospec'); await mkdir(embedded, { recursive: true });
+    await writeFile(path.join(embedded, 'hoospec.config.json'), JSON.stringify({ paths: { specs: 'fallback' } }));
+    assert.equal((await readPagesConfig(embedded, { CI_PROJECT_DIR: root, NODE_ENV: 'test' })).specDirectory, 'fallback');
+    await writeFile(path.join(root, 'hoospec.config.json'), JSON.stringify({ paths: { specs: 'chosen' } }));
+    assert.equal((await readPagesConfig(embedded, { CI_PROJECT_DIR: root, NODE_ENV: 'test' })).specDirectory, 'chosen');
+    await writeFile(path.join(root, 'hoospec.config.json'), '{invalid');
+    await assert.rejects(readPagesConfig(embedded, { CI_PROJECT_DIR: root, NODE_ENV: 'test' }), /ungültig/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

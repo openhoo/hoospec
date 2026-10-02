@@ -82,7 +82,7 @@ export function RepositoryStudio() {
     try {
       const normalized = connectionConfig(config);
       const { instance, project, branch, clientId, directory, specDirectory, adrDirectory, agentUrl } = normalized;
-      const data = { $schema: './hoospec.config.schema.json', schemaVersion: 1, gitlab: { instance, project, branch, clientId, directory, specDirectory, adrDirectory }, agent: { url: agentUrl || '' } };
+      const data = { $schema: './hoospec.config.schema.json', schemaVersion: 1, gitlab: { instance, project, branch, clientId }, paths: { workspace: directory, specs: specDirectory, adrs: adrDirectory }, agent: { url: agentUrl || '' } };
       const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json' }));
       const link = document.createElement('a'); link.href = url; link.download = 'hoospec.config.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (cause) { setError((cause as Error).message); }

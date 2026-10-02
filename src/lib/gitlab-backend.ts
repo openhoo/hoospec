@@ -116,7 +116,7 @@ export class GitLabBackend implements StudioBackend {
     let manifest: RepositoryManifest;
     if (canonical) manifest = parseRepositoryManifest(decodeRepositoryFile(canonical));
     else {
-      const paths = (await this.client.tree(head)).filter(path => /\.feature$/i.test(path) || (/\.(md|markdown)$/i.test(path) && !!this.client.config.adrDirectory && path.startsWith(this.client.config.adrDirectory + '/')));
+      const paths = (await this.client.tree(head)).filter(path => /\.feature$/i.test(path) && (!this.client.config.specDirectory || path.startsWith(this.client.config.specDirectory + '/')) || (/\.(md|markdown)$/i.test(path) && !!this.client.config.adrDirectory && path.startsWith(this.client.config.adrDirectory + '/')));
       if (paths.length > 200) throw new Error('Maximal 200 Specs und ADRs pro Workspace.');
       const files: Workspace['files'] = [], mapping: Record<string, string> = {};
       for (const path of paths) {
@@ -192,7 +192,10 @@ export class GitLabBackend implements StudioBackend {
     });
   }
   private async acceptDraft(next: RepositoryManifest) {
-    for (const file of next.workspace.files) next.paths[file.id] ||= `${this.client.config.directory}/${documentKind(file.filename) === 'adr' ? 'adrs' : 'specs'}/${file.filename}`;
+    for (const file of next.workspace.files) {
+      const directory = documentKind(file.filename) === 'adr' ? this.client.config.adrDirectory : this.client.config.specDirectory;
+      next.paths[file.id] ||= [directory, file.filename].filter(Boolean).join('/');
+    }
     if (new Set(next.workspace.files.map(file => next.paths[file.id])).size !== next.workspace.files.length) throw new Error('Dokumente dürfen nicht denselben Repository-Pfad verwenden.');
     if (new TextEncoder().encode(JSON.stringify(next, null, 2) + '\n').byteLength > 16000000) throw new Error('Der JSON-Workspace mit Verlauf ist zu groß (maximal 16 MB). Bitte einen kleineren Dokumentbestand verwalten.');
     const previous = this.manifest; this.manifest = next;

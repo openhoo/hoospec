@@ -73,3 +73,20 @@ test('repository imports give duplicate, unsupported and long basenames valid di
     assert.ok(/^[\p{L}\p{N}_. -]+\.feature$/iu.test(name)); assert.ok(name.length <= 120); used.add(name);
   }
 });
+
+test('repository discovery includes only configured specs even when the ADR subtree contains features', async () => {
+  const backend = new GitLabBackend({ ...config, specDirectory: 'features' }, 'fixture-token', async input => {
+    const url = new URL(String(input));
+    if (url.pathname.includes('/branches/')) return Response.json({ commit: { id: 'head' } });
+    if (url.pathname.endsWith('/tree')) return Response.json((url.searchParams.get('path') === 'features' ? ['features/ok.feature'] : ['docs/adr/choice.md', 'docs/adr/excluded.feature']).map(path => ({ type: 'blob', path })));
+    if (url.pathname.includes('/files/')) {
+      const path = decodeURIComponent(url.pathname.split('/files/')[1]);
+      if (path === 'hoospec/workspace.json') return new Response('', { status: 404 });
+      assert.notEqual(path, 'docs/adr/excluded.feature');
+      const source = path.endsWith('.md') ? '# Choice\n' : 'Feature: OK\n';
+      return Response.json({ content: Buffer.from(source).toString('base64'), size: source.length, encoding: 'base64', last_commit_id: 'head' });
+    }
+    return Response.json([]);
+  });
+  const state = await backend.load(); assert.equal(state.files.length, 2); backend.disconnect();
+});

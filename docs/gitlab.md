@@ -73,10 +73,12 @@ Damit alle dieselbe App verwenden, trage nur die öffentliche ID in `tools/hoosp
   "$schema": "./hoospec.config.schema.json",
   "schemaVersion": 1,
   "gitlab": {
-    "clientId": "öffentliche-application-id",
-    "directory": "hoospec",
-    "specDirectory": "features",
-    "adrDirectory": "docs/adr"
+    "clientId": "öffentliche-application-id"
+  },
+  "paths": {
+    "specs": "features",
+    "adrs": "docs/adr",
+    "workspace": "hoospec"
   },
   "agent": { "url": "" }
 }
@@ -86,6 +88,22 @@ GitLab-Adresse, Projekt und Defaultbranch werden automatisch aus GitLab CI über
 
 `schemaVersion`, Felder und URLs werden beim Build geprüft. Unbekannte Felder wie `clientSecret`, `token` oder `apiKey` werden abgelehnt. `NEXT_PUBLIC_GITLAB_*`-Variablen können öffentliche Einstellungen überschreiben, falls eure Plattform das bevorzugt.
 
+## Ablageorte im Repository
+
+`paths` legt die Verzeichnisse relativ zur **Repository-Wurzel** fest, auch wenn Hoospec unter `tools/hoospec` installiert ist:
+
+| Feld | Verwendung |
+| --- | --- |
+| `paths.specs` | Bestehende `.feature`-Dateien rekursiv laden; neue Specs hier generieren. |
+| `paths.adrs` | Bestehende `.md`- und `.markdown`-ADRs rekursiv laden; neue ADRs hier generieren. |
+| `paths.workspace` | Kanonisches JSON mit Verlauf unter `<workspace>/workspace.json`. |
+
+In GitLab CI hat eine `hoospec.config.json` in der Repository-Wurzel Vorrang. Fehlt sie, wird `tools/hoospec/hoospec.config.json` verwendet. Für lokale Pages-Builds aus dem eingebetteten Tool kann `CI_PROJECT_DIR` auf die Repository-Wurzel gesetzt werden. Bei einer Konfiguration an der Wurzel ist `$schema` optional oder zeigt auf `./tools/hoospec/hoospec.config.schema.json`.
+
+Änderungen an der Konfiguration benötigen einen neuen Pages-Build. Bestehende Dokumente im JSON behalten ihre gespeicherten Pfade; die Konfiguration verschiebt keine Dateien. Ein anderer Workspace-Pfad öffnet einen anderen Dokumentbestand. Sobald der Workspace existiert, wird dessen Bestand geladen; die Verzeichnissuche erfolgt nur beim ersten Laden ohne JSON.
+
+Ein leeres `specs` sucht im gesamten Repository und legt neue Specs an der Wurzel an. Ein leeres `adrs` deaktiviert die ADR-Suche; neue ADRs werden dann an der Wurzel angelegt. `workspace` darf nicht leer sein. Pfade mit `..` sind ungültig. Die bisherigen `gitlab.directory`, `gitlab.specDirectory` und `gitlab.adrDirectory` bleiben kompatibel; widersprüchliche Angaben werden abgelehnt.
+
 ## Rechte und Speicherung
 
 - Das Studio ist an das konfigurierte Projekt gebunden. Es zeigt keinen freien Projektwechsel an.
@@ -93,7 +111,7 @@ GitLab-Adresse, Projekt und Defaultbranch werden automatisch aus GitLab CI über
 - Mitglieder mit Repository-Leserecht können Specs und ADRs lesen und herunterladen. Reporter und andere Mitglieder ohne Entwicklerrechte sehen **Nur lesen**; manuelle Bearbeitung, Agent und Import sind gesperrt. Gäste benötigen zusätzlich Repository-Leserecht, um Dokumente laden zu können.
 - Ab der Developer-Rolle können Mitglieder Entwürfe bearbeiten und Merge Requests erstellen, auch wenn der Zielbranch direkte Pushes verbietet. GitLab überprüft Schreibrechte auf dem Entwurfs-Branch, Branchschutz und Dateiversionen bei jedem Commit. Hoospec umgeht diese Regeln nicht.
 - Access- und Refresh-Tokens bleiben ausschließlich im Arbeitsspeicher. Während der Sitzung erneuert Hoospec OAuth-Tokens; beim Reload folgt eine neue OAuth-Anmeldung mit der bestehenden GitLab-Sitzung. Die Autorisierung erfolgt im Namen der jeweiligen Person.
-- `<directory>/workspace.json` ist das kanonische JSON. Bestehende Quellpfade bleiben erhalten; neue Dateien entstehen unter `<directory>/specs/` und `<directory>/adrs/`.
+- `<directory>/workspace.json` ist das kanonische JSON. Bestehende Quellpfade bleiben erhalten; neue Dateien entstehen unter `paths.specs` bzw. `paths.adrs`.
 - Der Workspace einschließlich Verlauf darf maximal 16 MB groß sein. Hoospec prüft diese Grenze vor einem Commit, damit ein gespeicherter Stand anschließend lesbar bleibt.
 - Autosave und fertige Agent-Änderungen verändern zunächst nur den lokalen Sitzungsentwurf. Erst **Entwurfs-MR erstellen** schreibt JSON und generierte Dateien in einem atomaren Commit auf einen neuen `hoospec/<workspace-hash>/<session-id>`-Branch und erstellt einen Draft-MR zum konfigurierten Zielbranch. **Änderungen synchronisieren** erzeugt einen weiteren Commit auf demselben MR-Branch. Es gibt keinen separaten Push-Schritt. Commits überspringen CI nicht; die Projektregeln entscheiden, welche Prüfungen laufen.
 - Sobald der JSON-Workspace existiert, verwaltet Hoospec diesen Dokumentbestand. Externe Änderungen an generierten Dateien werden vor einem Überschreiben erkannt. Zusätzliche Dokumente über **Dokument importieren** aufnehmen.
