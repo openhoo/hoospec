@@ -90,14 +90,30 @@ GitLab-Adresse, Projekt und Defaultbranch werden automatisch aus GitLab CI über
 
 - Das Studio ist an das konfigurierte Projekt gebunden. Es zeigt keinen freien Projektwechsel an.
 - Nach dem OAuth-Login prüft es zusätzlich die direkte bzw. geerbte Projektmitgliedschaft. Ein gültiger GitLab-Account allein genügt nicht.
-- Mitglieder mit Repository-Leserecht können Specs und ADRs lesen und herunterladen. Ohne Push-Recht am gewählten Branch erscheint **Nur lesen**; manuelle Bearbeitung, Agent, Import und Review-Schreiben sind gesperrt. Gäste benötigen zusätzlich Repository-Leserecht, um Dokumente laden zu können.
-- Mitglieder mit Push-Recht können editieren. GitLab überprüft Rollen, Branchschutz und Dateiversionen bei jedem Commit. Hoospec umgeht diese Regeln nicht.
+- Mitglieder mit Repository-Leserecht können Specs und ADRs lesen und herunterladen. Reporter und andere Mitglieder ohne Entwicklerrechte sehen **Nur lesen**; manuelle Bearbeitung, Agent und Import sind gesperrt. Gäste benötigen zusätzlich Repository-Leserecht, um Dokumente laden zu können.
+- Ab der Developer-Rolle können Mitglieder Entwürfe bearbeiten und Merge Requests erstellen, auch wenn der Zielbranch direkte Pushes verbietet. GitLab überprüft Schreibrechte auf dem Entwurfs-Branch, Branchschutz und Dateiversionen bei jedem Commit. Hoospec umgeht diese Regeln nicht.
 - Access- und Refresh-Tokens bleiben ausschließlich im Arbeitsspeicher. Während der Sitzung erneuert Hoospec OAuth-Tokens; beim Reload folgt eine neue OAuth-Anmeldung mit der bestehenden GitLab-Sitzung. Die Autorisierung erfolgt im Namen der jeweiligen Person.
 - `<directory>/workspace.json` ist das kanonische JSON. Bestehende Quellpfade bleiben erhalten; neue Dateien entstehen unter `<directory>/specs/` und `<directory>/adrs/`.
 - Der Workspace einschließlich Verlauf darf maximal 16 MB groß sein. Hoospec prüft diese Grenze vor einem Commit, damit ein gespeicherter Stand anschließend lesbar bleibt.
-- Ein Autosave schreibt JSON und generierte Dateien atomar mit `[skip ci]`. Änderungen an der Studio-Konfiguration oder Anwendung lösen die normale CI aus.
+- Autosave und fertige Agent-Änderungen verändern zunächst nur den lokalen Sitzungsentwurf. Erst **Entwurfs-MR erstellen** schreibt JSON und generierte Dateien in einem atomaren Commit auf einen neuen `hoospec/<workspace-hash>/<session-id>`-Branch und erstellt einen Draft-MR zum konfigurierten Zielbranch. **Änderungen synchronisieren** erzeugt einen weiteren Commit auf demselben MR-Branch. Es gibt keinen separaten Push-Schritt. Commits überspringen CI nicht; die Projektregeln entscheiden, welche Prüfungen laufen.
 - Sobald der JSON-Workspace existiert, verwaltet Hoospec diesen Dokumentbestand. Externe Änderungen an generierten Dateien werden vor einem Überschreiben erkannt. Zusätzliche Dokumente über **Dokument importieren** aufnehmen.
-- Andere geöffnete Studios sehen gespeicherte Commits durch Polling. Präsenz und die Übertragung noch ungespeicherter Entwürfe gehören zum separaten Node-Server-Modus.
+- Teammitglieder öffnen unter **Entwürfe → Gemeinsame Entwürfe** denselben MR. Synchronisierte Änderungen erscheinen durch Polling spätestens nach 10 Sekunden bei erreichbarem GitLab. Lokale Eingaben und Präsenz werden in Pages nicht live übertragen; das leistet der separate Node-Server-Modus.
+
+## Entwürfe und Zusammenarbeit
+
+1. Dokumente wie gewohnt bearbeiten. Inline-Autosave, Undo/Redo und der Agent arbeiten im lokalen Entwurf; es entsteht noch kein Commit.
+2. Oben **Änderungen** öffnen, Dateidiffs prüfen und einen aussagekräftigen MR-Titel eingeben.
+3. **Entwurfs-MR erstellen** legt den Branch mit einem atomaren Commit und den Draft-MR an. Erst danach ist der Entwurf für das Team gespeichert. Im Dialog bleibt der GitLab-Link sichtbar.
+4. Andere Mitglieder öffnen denselben MR unter **Entwürfe → Gemeinsame Entwürfe**. Weitere Bearbeitungen bewusst mit **Änderungen synchronisieren** teilen; pro Synchronisierung entsteht ein Commit mit der eingegebenen Nachricht. Es wird derselbe MR weitergeführt.
+5. Review, Freigabe, „Ready“ und Merge erfolgen in GitLab unter dessen Projektregeln. Hoospec merged niemals automatisch. Nach Merge oder Schließen wechselt ein Studio ohne lokale Änderungen zurück zum Zielbranch.
+
+### Gleichzeitige Änderungen
+
+Ein geänderter gemeinsamer Branch überschreibt keinen lokalen Entwurf. Solange eigene Änderungen offen sind, zeigt das Studio **Konflikt prüfen** und blockiert die Synchronisierung. Der Dialog bietet zwei direkte Möglichkeiten: **Gemeinsamen Stand verwenden** verwirft den lokalen Entwurf; **Meinen Entwurf behalten** lädt den aktuellen gemeinsamen Stand und überträgt nur die lokal geänderten Dokumente darauf. Die Änderungen bleiben zunächst lokal und können als Diff geprüft werden, bevor **Änderungen synchronisieren** sie teilt. Bei demselben Dokument entscheidet diese Auswahl bewusst für den eigenen kompletten Dokumentstand; es gibt keine automatische Zusammenführung einzelner Sätze.
+
+Lokale Entwürfe werden automatisch in IndexedDB gesichert, getrennt nach GitLab-Instanz, Projekt, Zielbranch, Workspace-Verzeichnis und Browser-Tab. Ein Reload oder eine erneute OAuth-Anmeldung im selben Tab stellt den Entwurf nach erfolgreicher Projektprüfung wieder her. Auch ein ausstehender Commit/MR-Vorgang bleibt wiederholbar. Andere Tabs teilen ausschließlich den synchronisierten MR-Stand. Tokens und Agent-Zugänge bleiben im Arbeitsspeicher; sie werden niemals mit dem Entwurf gespeichert. Ein neu geöffneter Tab startet eine eigene lokale Sitzung. Private Browser-Modi, gelöschte Website-Daten oder ein nicht verfügbarer Browser-Speicher können diese lokale Sicherung verhindern; Hoospec zeigt dann einen Speicherfehler und bestätigt die Eingabe nicht als gespeichert.
+
+Falls GitLab den Commit angenommen hat, aber die MR-Erstellung oder Antwort fehlschlägt, prüft **Erneut versuchen** den vorhandenen Branch und setzt die Einreichung ohne zweiten Commit fort. Ein Draft-MR ist eine GitLab-Arbeitskopie, keine Übernahme in den Zielbranch.
 
 ## Optional: AI
 
@@ -125,7 +141,7 @@ Die Bridge ersetzt nicht die Pages-Zugriffskontrolle. Ein sicher betriebener Bri
 | Pages meldet 404 oder fehlenden Zugriff | Projektmitgliedschaft, Pages-Sichtbarkeit, ggf. Gruppen-SSO prüfen. |
 | OAuth `redirect_uri` ungültig | Exakte URL aus Hoospec registrieren; Unique Domain, Unterpfad und Slash beachten. |
 | OAuth-Anmeldung klappt, API nicht erreichbar | GitLab-Adresse, HTTPS/Zertifikate, CORS und Reverse Proxy prüfen. GitLabs API und `/oauth/token` müssen vom Pages-Browser erreichbar sein. |
-| Nur lesen auf `main` | Rolle und **Allowed to push and merge** des geschützten Branches prüfen oder einen freigegebenen Review-Branch wählen. |
+| Nur lesen | Mindestens Developer-Rolle für Bearbeitung und MR-Erstellung erforderlich. Bei einem gemeinsamen Entwurf zusätzlich den Schutz seines `hoospec/*`-Branches prüfen. Direkte Pushrechte auf `main` sind nicht erforderlich. |
 | Hoospec fehlt auf Pages | `needs: hoospec-build` mit Artefakten; Attach-Schritt nach dem Website-Build; richtiges Ausgabeverzeichnis. |
 | `_next`-Assets 404 | Tatsächliche `CI_PAGES_URL`, `HOOSPEC_PAGES_PATH` und einen eventuell überschriebenen `NEXT_PUBLIC_BASE_PATH` prüfen. |
 | Konkurrierende Änderung | Entwurf bleibt offen; aktuellen Repository-Stand prüfen und Änderung erneut übernehmen. |

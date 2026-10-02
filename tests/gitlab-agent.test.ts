@@ -42,3 +42,10 @@ test('incomplete or invalid GitLab bridge output produces an error without repos
     assert.equal(commits(), 0); backend.disconnect();
   }
 });
+test('a completed GitLab agent edit is validated into a local draft without a commit', async () => {
+  const { backend, body, commits } = fixture(async () => new Response('event: complete\ndata: {"replacement":"    Given a better card"}\n\n'));
+  const response = await backend.agent(body), result = await response.text();
+  assert.match(result, /event: complete/); assert.doesNotMatch(result, /event: error/);
+  assert.match((await backend.load()).files[0].source, /a better card/);
+  assert.equal((await backend.load()).repository!.changes.length, 1); assert.equal(commits(), 0); backend.disconnect();
+});

@@ -71,9 +71,9 @@ test('nonmembers cannot enter the project studio even when the repository is pub
   const client = new GitLabClient(config, 'fixture-token', async () => Response.json({ permissions: { project_access: null, group_access: null } }));
   await assert.rejects(client.verifyMembership(), /nur für Mitglieder/);
 });
-test('inherited project membership is accepted while protected branches disable editing', async () => {
+test('Developers can propose MRs against a protected target but cannot write a protected draft branch', async () => {
   const client = new GitLabClient(config, 'fixture-token', async url => Response.json(String(url).includes('/branches/') ? { commit: { id: 'head' }, can_push: false } : { permissions: { group_access: { access_level: 30 } } }));
-  await client.verifyMembership(); assert.equal(client.readOnly, false); await client.head(); assert.equal(client.readOnly, true);
+  await client.verifyMembership(); assert.equal(client.readOnly, false); await client.head(); assert.equal(client.readOnly, false); await client.head('hoospec/protected'); assert.equal(client.readOnly, true);
 });
 test('read-only project members can load documents but neither commit nor start AI edits', async () => {
   const document = documentFromSource('# ADR\n', 'adr.md');
@@ -87,6 +87,7 @@ test('read-only project members can load documents but neither commit nor start 
   });
   const state = await backend.load(); assert.equal(state.files.length, 1); assert.equal(backend.readOnly, true);
   await assert.rejects(backend.request({ action: 'save', actor: 'test', fileId: 'adr', version: 1, source: '# Changed\n' }), /Leserechte/);
+  await assert.rejects(backend.repository.submit('Forbidden'), /Schreibrechte/);
   assert.equal((await backend.agent({})).status, 403); assert.equal(posts, 0); backend.disconnect();
 });
 test('embedding preserves the existing website and refuses collisions or symlink escapes', async () => {

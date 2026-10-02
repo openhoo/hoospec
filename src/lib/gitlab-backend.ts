@@ -1,5 +1,6 @@
+import { BrowserDraftStore, MemoryDraftStore, type RepositoryDraftStore } from './repository-draft';
 import type { GitLabAccess } from './gitlab-auth';
-import { GitLabClient, decodeRepositoryFile, normalizeGitLabConfig, repositoryPath, type GitLabConfig, type RepositoryFile, type CommitAction } from './gitlab-client';
+import { GitLabClient, decodeRepositoryFile, normalizeGitLabConfig, repositoryPath, type GitLabConfig, type RepositoryFile, type CommitAction, GitLabError } from './gitlab-client';
 import { migrateWorkspace } from './workspace-migration';
 import { applyWorkspaceAction } from './workspace-actions';
 import { applyChange, fileAt } from './workspace-core';
@@ -9,7 +10,7 @@ import { documentFromSource, renderDocument } from './json-document';
 import { flattenNodes, replaceNode } from './gherkin';
 import { EventStreamDecoder } from './event-stream';
 import { parseDocument, documentKind } from './document';
-import { downloadDocument, type BackendListener, type StudioBackend } from './studio-backend';
+import { downloadDocument, type BackendListener, type StudioBackend, type ReviewSession } from './studio-backend';
 import type { Snapshot, Workspace } from './types';
 
 export type RepositoryManifest = { schemaVersion: 1; workspace: Workspace; paths: Record<string, string> };
@@ -38,6 +39,9 @@ export function repositoryFilename(repositoryFilePath: string, id: string, used:
     if (!used.has(name)) return name;
   }
 }
+function matchesManifest(file: RepositoryFile, manifest: RepositoryManifest) {
+  return JSON.stringify(parseRepositoryManifest(decodeRepositoryFile(file))) === JSON.stringify(parseRepositoryManifest(JSON.stringify(manifest)));
+}
 function snapshotOf(workspace: Workspace, revision: number): Snapshot {
   return { ...structuredClone(workspace), revision, files: workspace.files.map(file => ({ ...file, source: renderDocument(file.document) })),
     changes: workspace.changes.map(change => ({ ...change, before: change.before ? renderDocument(change.before) : '', after: renderDocument(change.after) })),
@@ -47,10 +51,18 @@ function snapshotOf(workspace: Workspace, revision: number): Snapshot {
 export class GitLabBackend implements StudioBackend {
   readonly collaboration = false;
   readonly sessionId = crypto.randomUUID();
+  get hasDraft() { return this.changes().length > 0 || !!this.publication; }
   get readOnly() { return this.client.readOnly; }
   get label() { return this.readOnly ? 'Mit GitLab verbunden · Nur lesen' : 'Mit GitLab verbunden'; }
   readonly client: GitLabClient;
   private manifest?: RepositoryManifest;
+  private base?: RepositoryManifest;
+  private conflict = false;
+  private incoming?: RepositoryManifest;
+  private restored = false;
+  private readonly localDraft: RepositoryDraftStore;
+  private review?: ReviewSession;
+  private publication?: { branch: string; sha: string; manifest: RepositoryManifest; title: string };
   private canonical: RepositoryFile | null = null;
   private head = '';
   private revision = 0;
@@ -59,16 +71,45 @@ export class GitLabBackend implements StudioBackend {
   private timer?: ReturnType<typeof setInterval>;
   private stopped = false;
   private agentRequests = new Set<AbortController>();
-  constructor(config: GitLabConfig, token: string | GitLabAccess, fetcher?: typeof fetch, private agentToken = '', private readonly bridgeFetch: typeof fetch = fetch) { this.client = new GitLabClient(config, token, fetcher); }
+  constructor(config: GitLabConfig, token: string | GitLabAccess, fetcher?: typeof fetch, private agentToken = '', private readonly bridgeFetch: typeof fetch = fetch, draftStore?: RepositoryDraftStore) {
+    this.client = new GitLabClient(config, token, fetcher);
+    const c = this.client.config;
+    this.localDraft = draftStore || (typeof window === 'undefined' ? new MemoryDraftStore() : new BrowserDraftStore(JSON.stringify([c.instance, c.project, c.branch, c.directory])));
+  }
   private get path() { return `${this.client.config.directory}/workspace.json`; }
   private serialized<T>(work: () => Promise<T>) { const next = this.queue.then(work); this.queue = next.catch(() => {}); return next; }
   private emit() { const state = this.current(); for (const listener of this.listeners) { listener.snapshot(state); listener.connection(true); } return state; }
-  private current() { if (!this.manifest) throw new Error('Repository noch nicht geladen.'); return { ...snapshotOf(this.manifest.workspace, this.revision), aiReady: !!this.client.config.agentUrl && !!this.agentToken, model: this.client.config.agentUrl ? 'Serverseitiger Agent' : '' }; }
+  private changes() {
+    if (!this.manifest || !this.base) return [];
+    return this.manifest.workspace.files.flatMap(file => {
+      const old = this.base!.workspace.files.find(item => item.id === file.id);
+      const before = old ? renderDocument(old.document) : '', after = renderDocument(file.document);
+      const shared = this.incoming?.workspace.files.find(item => item.id === file.id);
+      return old && before === after && old.reviewed === file.reviewed ? [] : [{ filename: file.filename, path: this.manifest!.paths[file.id], before: shared ? renderDocument(shared.document) : before, after }];
+    });
+  }
+  private async branchPrefix() {
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(this.client.config.directory));
+    return `hoospec/${Array.from(new Uint8Array(hash)).slice(0, 8).map(n => n.toString(16).padStart(2, '0')).join('')}/`;
+  }
+  private current() { if (!this.manifest) throw new Error('Repository noch nicht geladen.'); return { ...snapshotOf(this.manifest.workspace, this.revision), aiReady: !!this.client.config.agentUrl && !!this.agentToken, model: this.client.config.agentUrl ? 'Serverseitiger Agent' : '', repository: {
+    project: this.client.config.project, targetBranch: this.client.config.branch, branch: this.publication?.branch || this.review?.source_branch || this.client.config.branch,
+    changes: this.changes(), conflict: this.conflict, submissionPending: !!this.publication,
+    ...(this.review ? { mergeRequest: { iid: this.review.iid, title: this.review.title, url: this.review.web_url, state: this.review.state } } : {}),
+  } }; }
   private async refresh() {
     if (this.stopped) throw new Error('Repository-Verbindung wurde getrennt.');
     const previousReadOnly = this.readOnly;
     await this.client.verifyMembership();
-    const head = await this.client.head();
+    if (this.publication) return; // A successful commit with an unconfirmed MR must remain retryable.
+    if (this.review) {
+      const latest = await this.client.mergeRequest(this.review.iid);
+      if (latest.state !== 'opened') {
+        if (this.changes().length) { this.review = latest; this.conflict = true; this.revision++; return; }
+        this.review = undefined; this.head = '';
+      } else this.review = latest;
+    }
+    const head = await this.client.head(this.review?.source_branch);
     if (previousReadOnly !== this.readOnly) this.revision++;
     if (head === this.head && this.manifest) return;
     const canonical = await this.client.file(this.path, head);
@@ -90,9 +131,33 @@ export class GitLabBackend implements StudioBackend {
       manifest = { schemaVersion: 1, workspace: { schemaVersion: 2, revision: 1, files, changes: [], activeFileId: files[0]?.id || '', history: {} }, paths: mapping };
     }
     if (this.stopped) throw new Error('Repository-Verbindung wurde getrennt.');
-    this.canonical = canonical; this.manifest = manifest; this.head = head; this.revision++;
+    if (this.changes().length && this.manifest) { this.incoming = manifest; this.conflict = true; this.revision++; return; }
+    this.incoming = undefined;
+    this.canonical = canonical; this.manifest = manifest; this.base = structuredClone(manifest); this.head = head; this.conflict = false; this.revision++;
   }
-  load(): Promise<Snapshot> { return this.serialized(async () => { await this.refresh(); return this.emit(); }); }
+  private sessionState() {
+    return { schemaVersion: 1, manifest: this.manifest, base: this.base, head: this.head, reviewIid: this.review?.iid, publication: this.publication };
+  }
+  private async saveSession() { await this.localDraft.write(this.sessionState()); }
+  private async restoreSession() {
+    if (this.restored) return;
+    const saved = await this.localDraft.read();
+    if (saved && typeof saved === 'object' && 'schemaVersion' in saved && saved.schemaVersion === 1 && 'manifest' in saved && 'base' in saved && 'head' in saved) {
+      const record = saved as { manifest: unknown; base: unknown; head: string; reviewIid?: number; publication?: { branch: string; sha: string; manifest: unknown; title: string } };
+      const manifest = parseRepositoryManifest(JSON.stringify(record.manifest)), base = parseRepositoryManifest(JSON.stringify(record.base));
+      if (typeof record.head !== 'string' || !record.head || record.head.length > 255) throw new Error('Der lokale Entwurf enthält keinen gültigen Ausgangsstand.');
+      const review = record.reviewIid ? await this.client.mergeRequest(record.reviewIid) : undefined;
+      const prefix = await this.branchPrefix();
+      if (review && (review.target_branch !== this.client.config.branch || !review.source_branch.startsWith(prefix))) throw new Error('Der lokale Entwurf gehört zu einem anderen Workspace.');
+      const publication = record.publication ? { ...record.publication, manifest: parseRepositoryManifest(JSON.stringify(record.publication.manifest)) } : undefined;
+      if (publication && (!publication.branch.startsWith(prefix) || typeof publication.sha !== 'string' || typeof publication.title !== 'string')) throw new Error('Ungültige lokale Einreichung.');
+      const canonical = await this.client.file(this.path, record.head);
+      this.manifest = manifest; this.base = base; this.head = record.head; this.canonical = canonical; this.review = review; this.publication = publication; this.revision++;
+      await this.refresh();
+    }
+    this.restored = true;
+  }
+  load(): Promise<Snapshot> { return this.serialized(async () => { await this.refresh(); await this.restoreSession(); await this.saveSession(); return this.emit(); }); }
   subscribe(listener: BackendListener) {
     this.listeners.add(listener);
     if (this.manifest) { listener.snapshot(this.current()); listener.connection(true); }
@@ -119,35 +184,136 @@ export class GitLabBackend implements StudioBackend {
       const fresh = current.workspace.files.find(file => file.id === body.fileId);
       if (beforeRefresh && fresh && renderDocument(beforeRefresh.document) !== renderDocument(fresh.document)) throw new Error('Das Dokument wurde inzwischen in GitLab geändert. Dein Entwurf bleibt erhalten. Bitte den aktuellen Stand prüfen.');
       if (this.readOnly) throw new Error('Du hast auf diesem Branch nur Leserechte. Ein Projekt-Maintainer kann Schreibrechte freigeben.');
+      if (this.publication) throw new Error('Der Branch ist gespeichert, aber der Merge Request noch nicht bestätigt. Bitte zuerst die Einreichung erneut versuchen.');
       const next = structuredClone(current);
       applyWorkspaceAction(next.workspace, body); next.workspace.revision++;
-      await this.persist(current, next, body.action === 'review' ? 'Hoospec: Review aktualisiert' : `Hoospec: ${String(body.action === 'import' ? 'Dokument importiert' : 'Dokument bearbeitet')}`);
+      await this.acceptDraft(next);
       return this.emit();
     });
   }
-  private async persist(previous: RepositoryManifest, next: RepositoryManifest, message: string, signal?: AbortSignal) {
+  private async acceptDraft(next: RepositoryManifest) {
     for (const file of next.workspace.files) next.paths[file.id] ||= `${this.client.config.directory}/${documentKind(file.filename) === 'adr' ? 'adrs' : 'specs'}/${file.filename}`;
+    if (new Set(next.workspace.files.map(file => next.paths[file.id])).size !== next.workspace.files.length) throw new Error('Dokumente dürfen nicht denselben Repository-Pfad verwenden.');
+    if (new TextEncoder().encode(JSON.stringify(next, null, 2) + '\n').byteLength > 16000000) throw new Error('Der JSON-Workspace mit Verlauf ist zu groß (maximal 16 MB). Bitte einen kleineren Dokumentbestand verwalten.');
+    const previous = this.manifest; this.manifest = next;
+    try { await this.saveSession(); }
+    catch (error) { this.manifest = previous; throw error; }
+    this.revision++;
+  }
+  private async actions(previous: RepositoryManifest, next: RepositoryManifest) {
     const manifestSource = JSON.stringify(next, null, 2) + '\n';
-    if (new TextEncoder().encode(manifestSource).byteLength > 16000000) throw new Error('Der JSON-Workspace mit Verlauf ist zu groß (maximal 16 MB). Bitte einen kleineren Dokumentbestand in einem separaten Hoospec-Verzeichnis verwalten. Es wurde nichts gespeichert.');
     const actions: CommitAction[] = [];
     for (const file of next.workspace.files) {
       const old = previous.workspace.files.find(item => item.id === file.id);
       const content = renderDocument(file.document);
       const path = next.paths[file.id];
-      if (old && renderDocument(old.document) === content && this.canonical) continue;
+
       const remote = await this.client.file(path, this.head);
+      if (old && !remote) throw new Error(`Die Datei ${path} wurde außerhalb von Hoospec entfernt. Sie wird nicht neu angelegt.`);
       if (remote && (!old || decodeRepositoryFile(remote) !== renderDocument(old.document))) throw new Error(`Die Datei ${path} wurde außerhalb von Hoospec geändert. Sie wird nicht überschrieben.`);
       if (!remote || decodeRepositoryFile(remote) !== content) actions.push({ action: remote ? 'update' : 'create', file_path: path, content, ...(remote ? { last_commit_id: remote.last_commit_id } : {}) });
     }
     actions.push({ action: this.canonical ? 'update' : 'create', file_path: this.path, content: manifestSource, ...(this.canonical ? { last_commit_id: this.canonical.last_commit_id } : {}) });
-    signal?.throwIfAborted();
-    if (this.stopped) throw new Error('Repository-Verbindung wurde getrennt.');
-    await this.client.commit(actions, message);
-    // Read the committed branch before accepting anything as saved.
-    this.head = ''; await this.refresh(); this.revision++;
+    return actions;
   }
+  private async switchReview(review: ReviewSession | undefined, discard = false) {
+    const previous = { review: this.review, manifest: this.manifest, base: this.base, head: this.head, canonical: this.canonical, conflict: this.conflict };
+    try {
+      if (discard) this.manifest = structuredClone(this.base!);
+      this.review = review; this.head = ''; this.conflict = false;
+      await this.refresh(); await this.saveSession(); return this.emit();
+    } catch (error) {
+      Object.assign(this, previous); this.revision++; this.emit(); throw error;
+    }
+  }
+  readonly repository = {
+    submit: (title: string) => this.serialized(async () => {
+      if (!title.trim() || title.trim().length > 200) throw new Error('Bitte einen Titel mit maximal 200 Zeichen eingeben.');
+      await this.refresh();
+      if (this.readOnly) throw new Error('Für einen Merge Request brauchst du Schreibrechte im Projekt.');
+      if (this.conflict) throw new Error('Der gemeinsame Stand wurde geändert. Dein Entwurf bleibt erhalten. Bitte im Dialog den gewünschten Stand auswählen.');
+      if (!this.publication) {
+        if (!this.changes().length) throw new Error('Keine Änderungen zum Einreichen.');
+        const branch = this.review?.source_branch || (await this.branchPrefix()) + this.sessionId;
+        const next = structuredClone(this.manifest!);
+        const actions = await this.actions(this.base!, next);
+        // Record intent before the POST: a lost response must not duplicate an accepted commit.
+        this.publication = { branch, sha: '', manifest: next, title: title.trim() };
+        try { await this.saveSession(); } catch (error) { this.publication = undefined; throw error; }
+        try { this.publication.sha = await this.client.commit(actions, title.trim(), branch, this.review ? undefined : this.head); }
+        catch (error) {
+          if (error instanceof GitLabError && error.status >= 400 && error.status < 500) this.publication = undefined;
+          await this.saveSession(); this.revision++; this.emit(); throw error;
+        }
+        await this.saveSession(); this.revision++; this.emit();
+      }
+      const publication = this.publication;
+      if (!publication.sha) {
+        let sha = '';
+        try { sha = await this.client.head(publication.branch); }
+        catch (error) { if (!(error instanceof GitLabError && error.status === 404)) throw error; }
+        const remote = sha ? await this.client.file(this.path, sha) : null;
+        if (remote && matchesManifest(remote, publication.manifest)) publication.sha = sha;
+        else if (!sha || (this.review && sha === this.head)) {
+          publication.sha = await this.client.commit(await this.actions(this.base!, publication.manifest), publication.title, publication.branch, this.review ? undefined : this.head);
+        } else throw new Error('Der Entwurfs-Branch wurde inzwischen geändert. Es wird nichts überschrieben. Bitte den Branch in GitLab prüfen.');
+      }
+      const requests = await this.client.mergeRequests(publication.branch);
+      if (this.review && !requests.length) throw new Error('Der Merge Request wurde inzwischen geschlossen oder gemerged. Der Commit bleibt auf seinem Branch erhalten. Bitte in GitLab prüfen.');
+      const review = requests[0] || await this.client.createMergeRequest(publication.branch, publication.title);
+      if (this.stopped) throw new Error('Repository-Verbindung wurde getrennt.');
+      const remote = await this.client.file(this.path, publication.sha);
+      if (!remote || !matchesManifest(remote, publication.manifest)) throw new Error('Der gespeicherte Branch konnte noch nicht bestätigt werden. Bitte erneut versuchen.');
+      this.review = review; this.manifest = publication.manifest; this.base = structuredClone(publication.manifest);
+      this.head = publication.sha; this.canonical = remote; this.publication = undefined; this.conflict = false; this.revision++;
+      await this.saveSession(); return this.emit();
+    }),
+    discard: () => this.serialized(async () => {
+      if (this.publication) throw new Error('Der Branch wurde bereits gespeichert. Bitte die Einreichung abschließen.');
+      if (!this.base) throw new Error('Repository noch nicht geladen.');
+      return this.switchReview(this.review, true);
+    }),
+    resolveConflict: () => this.serialized(async () => {
+      if (!this.conflict || this.publication) throw new Error('Kein auflösbarer Konflikt.');
+      const local = structuredClone(this.manifest!), changed = this.changes();
+      const previous = { review: this.review, manifest: this.manifest, base: this.base, head: this.head, canonical: this.canonical, conflict: this.conflict };
+      try {
+        this.manifest = structuredClone(this.base!); this.head = ''; this.conflict = false;
+        await this.refresh();
+        if (this.readOnly) throw new Error('Für eine Bearbeitung brauchst du Schreibrechte im Projekt.');
+        const next = structuredClone(this.manifest!);
+        for (const change of changed) {
+          const incoming = local.workspace.files.find(file => file.filename === change.filename)!;
+          const existing = next.workspace.files.find(file => file.id === incoming.id);
+          if (existing) {
+            if (renderDocument(existing.document) !== change.after) applyChange(next.workspace, existing.id, existing.version, change.after, local.workspace.changes.find(item => item.fileId === incoming.id)?.actor || 'Team', 'Eigenen Entwurf nach Konflikt beibehalten', 'manual');
+            if (existing.reviewed !== incoming.reviewed) applyWorkspaceAction(next.workspace, { action: 'review', fileId: existing.id, version: existing.version, actor: 'Team' });
+          } else {
+            if (next.workspace.files.some(file => file.filename === incoming.filename)) throw new Error('Ein neues Dokument mit diesem Namen wurde inzwischen angelegt. Bitte umbenennen.');
+            next.workspace.files.push(incoming); next.paths[incoming.id] = local.paths[incoming.id];
+          }
+        }
+        next.workspace.revision++; await this.acceptDraft(next); return this.emit();
+      } catch (error) { Object.assign(this, previous); this.revision++; this.emit(); throw error; }
+    }),
+    sessions: async () => {
+      const prefix = await this.branchPrefix();
+      return (await this.client.mergeRequests()).filter(review => review.source_branch.startsWith(prefix));
+    },
+    join: (iid: number) => this.serialized(async () => {
+      if (this.changes().length || this.publication) throw new Error('Bitte deinen Entwurf zuerst einreichen oder verwerfen.');
+      const review = await this.client.mergeRequest(iid);
+      if (review.state !== 'opened' || review.target_branch !== this.client.config.branch || !review.source_branch.startsWith(await this.branchPrefix())) throw new Error('Dieser Merge Request gehört nicht zu diesem Hoospec-Workspace.');
+      return this.switchReview(review);
+    }),
+    leave: () => this.serialized(async () => {
+      if (this.changes().length || this.publication) throw new Error('Bitte deinen Entwurf zuerst einreichen oder verwerfen.');
+      return this.switchReview(undefined);
+    }),
+  };
   async agent(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
     await this.load();
+    if (this.publication) return Response.json({ error: 'Bitte zuerst die Einreichung abschließen.' }, { status: 409 });
     if (this.readOnly) return Response.json({ error: 'Du hast auf diesem Branch nur Leserechte.' }, { status: 403 });
     const endpoint = this.client.config.agentUrl;
     if (!endpoint || !this.agentToken) return Response.json({ error: 'Bitte unter Repository-Verbindung den serverseitigen Agent-Dienst und seinen Zugang einrichten.' }, { status: 503 });
@@ -186,9 +352,10 @@ export class GitLabBackend implements StudioBackend {
           if (typeof replacement !== 'string' || !replacement.trim() || replacement.length > 200000) throw new Error('Der Agent hat keine vollständige Änderung zurückgegeben.');
           streamSignal.throwIfAborted();
           const source = replaceNode(file.source, node, replacement); documentFromSource(source, file.filename);
+          if (node.kind === 'step' && !flattenNodes(parseDocument(source, file.filename)).some(item => item.kind === 'step' && item.start === node.start)) throw new Error('Der Agent muss einen gültigen Gherkin-Schritt zurückgeben.');
           if (documentKind(file.filename) === 'adr' && readAdrStatus(source) !== readAdrStatus(file.source)) throw new Error('Der Agent darf den Entscheidungsstatus nicht ändern.');
           if (node.kind === 'adr-answer' && !/^\s+(?:\*\*)?(?:Antwort|Answer)(?:\*\*)?\s*:/i.test(replacement)) throw new Error('Der Antwortbereich muss erhalten bleiben.');
-          send('status', { message: 'Änderung in GitLab speichern …' });
+          send('status', { message: 'Änderung zum Entwurf hinzufügen …' });
           const state = await this.applyAgentChange(fileId, version, source, actor, instruction, streamSignal);
           send('complete', state);
         } catch (error) { send('error', { message: (error as Error).message }); }
@@ -202,9 +369,10 @@ export class GitLabBackend implements StudioBackend {
       await this.refresh();
       signal?.throwIfAborted();
       if (this.readOnly) throw new Error('Du hast auf diesem Branch nur Leserechte. Die Agent-Änderung wird nicht gespeichert.');
-      const previous = this.manifest!, next = structuredClone(previous);
+      if (this.publication) throw new Error('Bitte zuerst die Einreichung abschließen.');
+      const next = structuredClone(this.manifest!);
       applyChange(next.workspace, fileId, version, source, actor, instruction, 'ai'); next.workspace.revision++;
-      await this.persist(previous, next, `Hoospec: ${instruction.slice(0, 120)}`, signal); return this.emit();
+      await this.acceptDraft(next); return this.emit();
     });
   }
   download = downloadDocument;

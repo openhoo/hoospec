@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { RepositoryReviewDialog } from './repository-review';
 import { DocumentOverview } from './document-overview';
 import { InlineEditor } from './inline-editor';
 import { AnimatedWords } from './animated-words';
@@ -32,10 +33,11 @@ const labels: Record<SpecNode['kind'], string> = { feature: 'Feature', rule: 'Re
 const initialSource = 'Feature: Eine neue Idee\n  Was soll für unsere Nutzer möglich werden?\n\n  Scenario: Der erste Anwendungsfall\n    Given eine Ausgangssituation\n    When eine Aktion ausgeführt wird\n    Then ist das erwartete Ergebnis sichtbar\n';
 
 export function Studio({ backend = serverBackend, onRepository, suspended = false }: { backend?: StudioBackend; onRepository?: () => void; suspended?: boolean }) {
-  const readOnly = backend.readOnly === true;
+  const [repositoryOpen, setRepositoryOpen] = useState(false);
   const request = useCallback((body: Record<string, unknown>) => backend.request(body), [backend]);
   const { theme, setTheme } = useTheme();
   const [workspace, setWorkspace] = useState<Snapshot | null>(null);
+  const readOnly = backend.readOnly === true || workspace?.repository?.submissionPending === true;
   const [connected, setConnected] = useState(false);
   const [identity, setIdentity] = useState({ id: '', name: 'Gast' });
   const [selection, setSelectionState] = useState<Selection | null>(null);
@@ -78,6 +80,19 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
   const upload = useRef<HTMLInputElement>(null);
   const scroll = useRef<HTMLElement>(null);
   const elements = useRef(new Map<string, HTMLElement>());
+
+  useEffect(() => {
+    if (!backend.repository || !inlineEdit) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [backend, inlineEdit]);
+  async function openRepositoryReview() {
+    try {
+      if (inlineEdit && inlineFlush.current) await inlineFlush.current();
+      setInlineEdit(null); setRepositoryOpen(true);
+    } catch { /* Keep invalid inline drafts visible. */ }
+  }
 
   const accept = useCallback((next: Snapshot) => setWorkspace(current => mergeSnapshot(current, next)), []);
   useEffect(() => {
@@ -232,7 +247,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
-      if (suspended || overview) return;
+      if (suspended || repositoryOpen || overview) return;
       if (event.isComposing) return;
       const typing = (event.target as HTMLElement)?.closest('input,textarea,[contenteditable=true]');
       const currentInteraction = interaction.current;
@@ -276,7 +291,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
     };
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
-  }, [target, pin, nodes, viewFile, changeView, busy, tools, filesOpen, inlineEdit, restore, hoveredRow, file, changeTableRow, changeNode, overview, setSelection, setHoverId, startInline, suspended]);
+  }, [target, pin, nodes, viewFile, changeView, busy, tools, filesOpen, inlineEdit, restore, hoveredRow, file, changeTableRow, changeNode, overview, setSelection, setHoverId, startInline, suspended, repositoryOpen]);
 
   async function mutate(body: Record<string, unknown>, message?: string) {
     if (readOnly && body.action !== 'navigate') { setError('Du hast auf diesem Branch nur Leserechte.'); return null; }
@@ -334,7 +349,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
           const data = JSON.parse(frame.data);
           if (frame.event === 'delta') { output += data.text; setLocalDraft({ ...initial, text: previewAgentSource(output, isAdr ? 'markdown' : 'gherkin'), phase: 'writing' }); }
           if (frame.event === 'error') throw new Error(data.message);
-          if (frame.event === 'complete') { complete = true; accept(data); setInstruction(''); setSelection(null); setNotice('Gespeichert.'); }
+          if (frame.event === 'complete') { complete = true; accept(data); setInstruction(''); setSelection(null); setNotice(backend.repository ? 'Im Entwurf gespeichert.' : 'Gespeichert.'); }
         }
         if (done) break;
       } } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
@@ -436,7 +451,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
   return <div className="zen-studio" onClick={event => {
     if (!(event.target as HTMLElement).closest('button,a,input,textarea,[role="dialog"],[role="menu"],.zen-command')) clearFocus();
   }}>
-    <header className="zen-header"><button className="zen-brand" aria-label="Zur Übersicht" disabled={busy || pending || !!draft} onClick={async () => { try { if (inlineEdit && inlineFlush.current) await inlineFlush.current(); setInlineEdit(null); setSelection(null); setHoverId(null); setHoveredRow(null); setOverview(true); } catch { /* Preserve unsaved drafts. */ } }}>hoospec<span>.</span></button><button className="zen-file-picker" onClick={() => setFilesOpen(true)} aria-label="Dokument auswählen"><span>{overview ? 'Übersicht' : file?.filename || 'Dokumente laden …'}</span><ChevronDown size={15}/></button><div className="zen-header-right">{readOnly && <span className="zen-readonly">Nur lesen</span>}<span className={`zen-live-dot ${connected ? 'connected' : ''}`} role="status" aria-label={connected ? backend.label : 'Verbindung unterbrochen. Wird erneut verbunden.'} title={connected ? backend.label : 'Verbindung unterbrochen. Wird erneut verbunden.'}/>{(workspace?.participants.length || 0) > 1 && <button className="zen-peers" onClick={() => setTools('profile')} aria-label="Teilnehmer"><Users size={16}/>{workspace?.participants.length}</button>}<DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="Studio-Menü"/>}><MoreHorizontal size={20}/></DropdownMenuTrigger><DropdownMenuContent align="end" className="zen-menu"><DropdownMenuItem disabled={overview || readOnly} onClick={() => void openSource('source')}><Code2/>{isAdr ? 'Markdown bearbeiten' : 'Gherkin bearbeiten'}</DropdownMenuItem><DropdownMenuItem disabled={overview || readOnly} onClick={() => void openSource('json')}><Code2/>JSON bearbeiten</DropdownMenuItem><DropdownMenuItem disabled={overview} onClick={() => setTools('history')}><History/>Verlauf</DropdownMenuItem><DropdownMenuItem onClick={() => void restore('undo')} disabled={overview || readOnly || pending || busy || !(workspace?.history?.[file?.id || ''] ? workspace.history[file?.id || ''].undo : changes.some(c => c.before && c.kind !== 'review'))}><Undo2/>Rückgängig</DropdownMenuItem><DropdownMenuItem onClick={() => void restore('redo')} disabled={overview || readOnly || pending || busy || !workspace?.history?.[file?.id || '']?.redo}><History/>Wiederherstellen</DropdownMenuItem><DropdownMenuSeparator/>{(['light', 'dark', 'system'] as const).map(mode => <DropdownMenuItem key={mode} onClick={() => setTheme(mode)}>{theme === mode ? <Check/> : <span className="zen-theme-placeholder"/>}{mode === 'light' ? 'Hell' : mode === 'dark' ? 'Dunkel' : 'System'}</DropdownMenuItem>)}<DropdownMenuSeparator/><DropdownMenuItem disabled={readOnly} onClick={() => upload.current?.click()}><Upload/>Dokument importieren</DropdownMenuItem><DropdownMenuItem disabled={readOnly} onClick={() => openNew('feature')}><FilePlus2/>Neue Spec</DropdownMenuItem><DropdownMenuItem disabled={readOnly} onClick={() => openNew('adr')}><FilePlus2/>Neue ADR</DropdownMenuItem><DropdownMenuItem disabled={overview || !file} onClick={() => file && backend.download(file, 'source')}><ArrowDownToLine/>Herunterladen</DropdownMenuItem><DropdownMenuItem disabled={overview || !file} onClick={() => file && backend.download(file, 'json')}><ArrowDownToLine/>JSON herunterladen</DropdownMenuItem><DropdownMenuSeparator/><DropdownMenuItem onClick={async () => { try { await navigator.clipboard.writeText(location.href); setNotice('Link kopiert.'); } catch { setError('Bitte die Browser-Adresse kopieren.'); } }}><Link2/>Link kopieren</DropdownMenuItem>{backend.collaboration && <DropdownMenuItem onClick={() => { setLocalId(file?.id || null); setFollow(value => !value); }}>{follow ? 'Zur eigenen Ansicht wechseln' : 'Gemeinsamer Ansicht folgen'}</DropdownMenuItem>}<DropdownMenuItem onClick={() => setTools('profile')}><Users/>Dein Name</DropdownMenuItem>{onRepository && <><DropdownMenuSeparator/><DropdownMenuItem onClick={async () => { try { if (inlineEdit && inlineFlush.current) await inlineFlush.current(); setInlineEdit(null); onRepository(); } catch { /* Keep failed drafts visible. */ } }}><Link2/>Repository-Verbindung</DropdownMenuItem></>}</DropdownMenuContent></DropdownMenu></div></header>
+    <header className="zen-header"><button className="zen-brand" aria-label="Zur Übersicht" disabled={busy || pending || !!draft} onClick={async () => { try { if (inlineEdit && inlineFlush.current) await inlineFlush.current(); setInlineEdit(null); setSelection(null); setHoverId(null); setHoveredRow(null); setOverview(true); } catch { /* Preserve unsaved drafts. */ } }}>hoospec<span>.</span></button><button className="zen-file-picker" onClick={() => setFilesOpen(true)} aria-label="Dokument auswählen"><span>{overview ? 'Übersicht' : file?.filename || 'Dokumente laden …'}</span><ChevronDown size={15}/></button><div className="zen-header-right">{backend.repository && workspace?.repository && <button className="zen-repository-state" onClick={() => void openRepositoryReview()} disabled={busy || pending || !!draft} title="Änderungen und gemeinsame Entwürfe"><span className={workspace.repository.changes.length ? 'zen-draft-dot' : ''}/><span>{workspace.repository.conflict ? 'Konflikt prüfen' : workspace.repository.submissionPending ? 'Einreichung fortsetzen' : workspace.repository.changes.length ? 'Änderungen' : workspace.repository.mergeRequest ? `Entwurf !${workspace.repository.mergeRequest.iid}` : 'Entwürfe'}</span></button>}{backend.readOnly && <span className="zen-readonly">Nur lesen</span>}<span className={`zen-live-dot ${connected ? 'connected' : ''}`} role="status" aria-label={connected ? backend.label : 'Verbindung unterbrochen. Wird erneut verbunden.'} title={connected ? backend.label : 'Verbindung unterbrochen. Wird erneut verbunden.'}/>{(workspace?.participants.length || 0) > 1 && <button className="zen-peers" onClick={() => setTools('profile')} aria-label="Teilnehmer"><Users size={16}/>{workspace?.participants.length}</button>}<DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="Studio-Menü"/>}><MoreHorizontal size={20}/></DropdownMenuTrigger><DropdownMenuContent align="end" className="zen-menu"><DropdownMenuItem disabled={overview || readOnly} onClick={() => void openSource('source')}><Code2/>{isAdr ? 'Markdown bearbeiten' : 'Gherkin bearbeiten'}</DropdownMenuItem><DropdownMenuItem disabled={overview || readOnly} onClick={() => void openSource('json')}><Code2/>JSON bearbeiten</DropdownMenuItem><DropdownMenuItem disabled={overview} onClick={() => setTools('history')}><History/>Verlauf</DropdownMenuItem><DropdownMenuItem onClick={() => void restore('undo')} disabled={overview || readOnly || pending || busy || !(workspace?.history?.[file?.id || ''] ? workspace.history[file?.id || ''].undo : changes.some(c => c.before && c.kind !== 'review'))}><Undo2/>Rückgängig</DropdownMenuItem><DropdownMenuItem onClick={() => void restore('redo')} disabled={overview || readOnly || pending || busy || !workspace?.history?.[file?.id || '']?.redo}><History/>Wiederherstellen</DropdownMenuItem><DropdownMenuSeparator/>{(['light', 'dark', 'system'] as const).map(mode => <DropdownMenuItem key={mode} onClick={() => setTheme(mode)}>{theme === mode ? <Check/> : <span className="zen-theme-placeholder"/>}{mode === 'light' ? 'Hell' : mode === 'dark' ? 'Dunkel' : 'System'}</DropdownMenuItem>)}<DropdownMenuSeparator/><DropdownMenuItem disabled={readOnly} onClick={() => upload.current?.click()}><Upload/>Dokument importieren</DropdownMenuItem><DropdownMenuItem disabled={readOnly} onClick={() => openNew('feature')}><FilePlus2/>Neue Spec</DropdownMenuItem><DropdownMenuItem disabled={readOnly} onClick={() => openNew('adr')}><FilePlus2/>Neue ADR</DropdownMenuItem><DropdownMenuItem disabled={overview || !file} onClick={() => file && backend.download(file, 'source')}><ArrowDownToLine/>Herunterladen</DropdownMenuItem><DropdownMenuItem disabled={overview || !file} onClick={() => file && backend.download(file, 'json')}><ArrowDownToLine/>JSON herunterladen</DropdownMenuItem><DropdownMenuSeparator/><DropdownMenuItem onClick={async () => { try { await navigator.clipboard.writeText(location.href); setNotice('Link kopiert.'); } catch { setError('Bitte die Browser-Adresse kopieren.'); } }}><Link2/>Link kopieren</DropdownMenuItem>{backend.collaboration && <DropdownMenuItem onClick={() => { setLocalId(file?.id || null); setFollow(value => !value); }}>{follow ? 'Zur eigenen Ansicht wechseln' : 'Gemeinsamer Ansicht folgen'}</DropdownMenuItem>}<DropdownMenuItem onClick={() => setTools('profile')}><Users/>Dein Name</DropdownMenuItem>{onRepository && <><DropdownMenuSeparator/><DropdownMenuItem onClick={async () => { try { if (inlineEdit && inlineFlush.current) await inlineFlush.current(); setInlineEdit(null); onRepository(); } catch { /* Keep failed drafts visible. */ } }}><Link2/>Repository-Verbindung</DropdownMenuItem></>}</DropdownMenuContent></DropdownMenu></div></header>
     <input ref={upload} type="file" accept=".feature,.md,.markdown,.json" className="hidden" onChange={importFile}/>
     <main ref={scroll} className="zen-canvas" onPointerLeave={() => { setHoverId(null); setHoveredRow(null); }}>{overview && workspace ? <DocumentOverview files={workspace.files} disabled={busy || pending} readOnly={readOnly} onOpen={id => void navigate(id)} onCreate={kind => void openNew(kind)}/> : preview.tree && file ? <article key={file.id} className="zen-document">{renderNode(preview.tree)}</article> : <div className="zen-loading" role="status">{workspace && !workspace.files.length ? <><span>Noch keine Specs oder ADRs.</span><button onClick={() => void openNew('feature')}>Neue Spec</button><button onClick={() => void openNew('adr')}>Neue ADR</button></> : error ? <><span>{error}</span><button onClick={() => location.reload()}>Erneut verbinden</button></> : <><Loader2 size={24} className="animate-spin"/>{connected ? 'Dokumente werden geladen …' : 'Verbindung wird hergestellt …'}</>}</div>}<div className="zen-bottom-space"/></main>
     {!overview && box && !tools && !filesOpen && !pending && <div className={`zen-outline ${draft ? 'zen-working' : ''} ${selection ? 'zen-pinned' : ''}`} style={box}><span className="zen-outline-label">{draft ? <><Sparkles size={11}/> {draft.phase === 'validating' ? 'Prüfen …' : 'Wird geändert …'}</> : target ? labels[target.kind] : ''}</span></div>}
@@ -446,6 +461,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
     {notice && <div className="zen-toast" role="status"><Check size={14}/>{notice}</div>}
     {error && !!file && (!target || !!inlineEdit) && !tools && <div className="zen-error-toast" role="alert">{error}<button aria-label="Meldung schließen" onClick={() => setError('')}><X size={14}/></button></div>}
 
+    {backend.repository && workspace?.repository && <RepositoryReviewDialog open={repositoryOpen} onOpenChange={setRepositoryOpen} backend={backend} state={workspace.repository} accept={accept}/>}
     <Dialog open={filesOpen} onOpenChange={setFilesOpen}><DialogContent className="zen-files-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Deine Dokumente</DialogTitle><DialogDescription>Specs und Entscheidungen. Gemeinsam.</DialogDescription></DialogHeader>
       <div className="zen-document-filters" aria-label="Dokumentfilter">{(['all', 'feature', 'adr', 'open'] as const).map(filter => <button key={filter} aria-pressed={fileFilter === filter} onClick={() => setFileFilter(filter)}>{filter === 'all' ? 'Alle' : filter === 'feature' ? 'Specs' : filter === 'adr' ? 'ADRs' : 'Offene ADRs'}</button>)}</div>
       <Input aria-label="Dokumente durchsuchen" placeholder="Dokument finden …" value={query} onChange={event => setQuery(event.target.value)}/>
@@ -456,7 +472,7 @@ export function Studio({ backend = serverBackend, onRepository, suspended = fals
       {(tools === 'source' || tools === 'json') && editor && <><Textarea aria-label={tools === 'json' ? 'JSON-Dokument' : isAdr ? 'Markdown-Quelltext' : 'Gherkin-Quelltext'} className="zen-source-input" value={editor.draft} onChange={event => setEditor({ ...editor, draft: event.target.value })} spellCheck={false}/>{error && <p role="alert" className="zen-dialog-error">{error}</p>}<DialogFooter><Button onClick={async () => {
         try {
           const document = tools === 'json' ? JSON.parse(editor.draft) : documentFromSource(editor.draft, editor.file.filename);
-          if (await mutate({ action: 'save-document', fileId: editor.file.id, version: editor.file.version, document }, 'Gespeichert.')) { setTools(null); setEditor(null); }
+          if (await mutate({ action: 'save-document', fileId: editor.file.id, version: editor.file.version, document }, backend.repository ? 'Im Entwurf gespeichert.' : 'Gespeichert.')) { setTools(null); setEditor(null); }
         } catch (cause) { setError(cause instanceof SyntaxError ? 'Ungültiges JSON. Bitte die Syntax prüfen.' : (cause as Error).message); }
       }} disabled={pending || editor.draft === (tools === 'json' ? JSON.stringify(editor.file.document, null, 2) : editor.file.source)}>Speichern</Button></DialogFooter></>}
 

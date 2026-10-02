@@ -543,3 +543,30 @@ button:focus-visible { outline: 2px solid var(--ring); outline-offset: 5px; bord
   .zen-overview-section-heading > button { font-size: 11px; }
 }
 @media(prefers-reduced-motion:reduce) { .zen-overview-table tbody td::before, .zen-overview-open > svg { transition: none; } }
+
+.zen-repository-state { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; font-size: 12px; border-radius: 7px; color: var(--foreground); white-space: nowrap; transition: background 160ms ease; }
+.zen-repository-state:hover { background: color-mix(in srgb, var(--foreground) 4%, transparent); }
+.zen-draft-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.zen-repository-review { max-height: calc(100dvh - 40px); overflow-y: auto; }
+.zen-repository-explanation { font-size: 13px; line-height: 1.8; color: var(--muted-foreground); }
+.zen-review-link { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; text-decoration: underline; text-underline-offset: 4px; }
+.zen-review-conflict { padding: 12px 16px; font-size: 13px; line-height: 1.8; border-left: 2px solid var(--muted-foreground); background: color-mix(in srgb, var(--foreground) 3%, transparent); }
+.zen-review-changes { display: grid; gap: 6px; }
+.zen-review-changes summary { cursor: pointer; padding: 12px 8px; font-size: 14px; }
+.zen-review-changes .zen-diff { max-height: 35vh; }
+.zen-review-title { display: grid; gap: 8px; font-size: 13px; }
+.zen-review-sessions h3 { margin: 8px 0 12px; font-size: 14px; }
+.zen-review-sessions p { font-size: 13px; color: var(--muted-foreground); }
+.zen-review-sessions button { display: flex; justify-content: space-between; gap: 20px; padding: 14px 12px; width: 100%; text-align: left; border-radius: 6px; font-size: 14px; }
+.zen-review-sessions button:hover { background: color-mix(in srgb, var(--foreground) 3%, transparent); }
+.zen-review-sessions button > span:last-child { color: var(--muted-foreground); white-space: nowrap; }
+.zen-review-footer { justify-content: space-between; gap: 12px; }
+.zen-review-footer > div { display: flex; flex-wrap: wrap; }
+.zen-review-discard { padding: 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.zen-review-discard p { margin-bottom: 8px; }
+@media (max-width: 600px) {
+  .zen-repository-state { font-size: 11px; padding: 6px 4px; max-width: 120px; }
+  .zen-repository-state > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+  .zen-header:has(.zen-repository-state) .zen-file-picker { max-width: 90px; }
+}
+.zen-review-saved { display: inline-flex; align-items: center; padding: 7px 4px; margin-right: 12px; font-size: 12px; color: var(--muted-foreground); }

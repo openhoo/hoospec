@@ -34,6 +34,6 @@ The document picker also provides quick search and filtering. There is no review
 
 ## Collaboration and conflicts
 
-The Node server synchronizes saved changes, shared navigation, presence and live agent drafts. GitLab Pages polls saved repository commits; it does not synchronize unsaved drafts or presence.
+The Node server synchronizes saved changes, shared navigation, presence and live agent drafts. GitLab Pages collects edits in a local session draft. Explicit submission creates a draft merge request; team members can join the same MR and explicitly synchronize further changes. Pages polls that shared branch every 10 seconds and preserves conflicting local drafts. It does not synchronize unsaved input or presence. Local drafts are automatically stored per browser tab and recovered after reload and authorization, with direct conflict resolution; see [GitLab workflow](gitlab.md#entwürfe-und-zusammenarbeit).
 
 If another person changes a document first, the older edit is rejected. Keep your draft, inspect the current saved content and reapply the intended change. Externally changed generated repository files are not silently overwritten.

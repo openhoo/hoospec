@@ -79,3 +79,16 @@ The GitLab manifest is limited to 16 MB, including history. A large workspace ne
 ESLint remains on 9.39.5. An attempted upgrade to ESLint 10 failed in the React plugin bundled with `eslint-config-next` 16.3.8 (`contextOrFilename.getFilename is not a function`). The working lint stack was restored; its dependency audit is clean. Upgrade this development tooling when the bundled plugin supports ESLint 10.
 
 See [GitLab setup](gitlab.md), [editor workflow](editor.md), [testing](testing.md) and [security policy](../SECURITY.md).
+
+
+## Controlled shared merge requests — October 2, 2026
+
+The GitLab Pages workflow now collects edits in an automatically persisted, private per-tab browser draft. Creating a draft MR or synchronizing an existing MR is explicit and reviewed through a calm file diff. The target branch is never written by the studio workflow; normal GitLab review and merge controls govern acceptance. The workflow contains no manual workspace export/import controls.
+
+- Team members can join the same workspace-specific MR branch; synchronized checkpoints are polled every 10 seconds.
+- Conflicting local edits survive polling, reload and OAuth. Direct conflict choices can adopt the common checkpoint or retain locally changed documents on top of it without replacing other documents added by collaborators.
+- Interrupted commits/MR requests are stored locally and retry without duplicate commits, including recovery after reload and a lost commit response. Source JSON comparison is semantic so migration/property ordering cannot prevent recovery.
+- Local draft storage failure does not report an input as saved; credentials are excluded from persistence. Developers can propose changes to protected targets without direct target push rights. Commit validation and optimistic file checks remain enforced.
+- Local verification: lint, 82 unit tests, production build and 27 server integration checks passed. Nested static Pages export and asset checks passed. Eight checks against the disposable GitLab CE instance passed, including an actual merge and target readback.
+- Browser verification on the private existing-project Pages fixture: OAuth, MR creation, joining/leaving/rejoining, automatic unsynchronized draft recovery after reload/OAuth, and synchronizing another commit into the same MR. The initial MR had one commit while the newer local draft was visible; only the explicit synchronization added the second commit. Desktop and mobile dialog screenshots use synthetic test content.
+- Test Pages pipeline 49 (`7b5e7ff608ebc8261512d580348d0f76f8e89009`) passed. This changes the earlier immediate-autosave commit behavior described in the original release evidence above. Node server collaboration remains independent of this Pages workflow.

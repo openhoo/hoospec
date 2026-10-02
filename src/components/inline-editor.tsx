@@ -36,7 +36,7 @@ export function InlineEditor({ edit, backend = serverBackend, actor, onSnapshot,
       while (current.current.value !== current.current.saved) {
         const { file, node, value } = current.current;
         const source = inlineSource(file.source, node, edit.mode, value, edit.cell);
-        if (source === file.source) { current.current.saved = value; setStatus('Gespeichert'); continue; }
+        if (source === file.source) { current.current.saved = value; setStatus(backend.repository ? 'Entwurf' : 'Gespeichert'); continue; }
         setStatus('Speichert …'); setError('');
         const state = await backend.request({ action: 'save-document', fileId: file.id, version: file.version, document: documentFromSource(source, file.filename), actor: callbacks.current.actor });
         const savedFile = state.files.find((item: SpecFile) => item.id === file.id)!;
@@ -44,7 +44,7 @@ export function InlineEditor({ edit, backend = serverBackend, actor, onSnapshot,
         const savedNode = savedNodes.find(item => item.id === node.id) || savedNodes.find(item => item.kind === node.kind && item.start >= node.start && item.start <= node.end + source.split('\n').length - file.source.split('\n').length) || { ...node, end: node.end + source.split('\n').length - file.source.split('\n').length };
         current.current = { ...current.current, file: savedFile, node: savedNode, saved: value };
         callbacks.current.onSnapshot(state); result = state;
-        setStatus('Gespeichert');
+        setStatus(backend.repository ? 'Entwurf' : 'Gespeichert');
       }
       return result;
     };
@@ -82,7 +82,7 @@ export function InlineEditor({ edit, backend = serverBackend, actor, onSnapshot,
           const action = key === 'y' || event.shiftKey ? 'redo' : 'undo';
           if (action === 'undo' && current.current.value !== current.current.saved) {
             draftRedo.current = current.current.value; current.current.value = current.current.saved;
-            setValue(current.current.saved); setError(''); setStatus('Gespeichert'); return;
+            setValue(current.current.saved); setError(''); setStatus(backend.repository ? 'Entwurf' : 'Gespeichert'); return;
           }
           if (action === 'redo' && draftRedo.current !== null) {
             current.current.value = draftRedo.current; setValue(draftRedo.current); draftRedo.current = null; setError(''); return;

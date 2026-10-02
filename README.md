@@ -42,8 +42,8 @@ This copies Hoospec to `tools/hoospec/`. Add the provided CI include and attach 
 
 - Public OAuth application with PKCE; normal users do not need a personal access token.
 - Project membership is checked, and members without push permission get a read-only view.
-- JSON and generated source files are saved in one atomic GitLab commit.
-- Tokens stay in memory. Document saves use `[skip ci]` to avoid rebuilding Pages on every edit.
+- Collect edits locally, preview diffs and explicitly submit an atomic commit as a draft GitLab merge request. Team members can open the same draft and synchronize further changes. The target branch changes only when merged in GitLab.
+- Local drafts are saved automatically in the browser and restored after reload in the same tab. OAuth tokens stay in memory. Shared work is stored on a draft branch and follows project CI rules.
 
 **GitLab Pages access control protects the entire project's Pages website.** Set it to **Only project members**. Enabling access control on a self-hosted instance may require its operator. Hoospec's browser login alone does not make a public Pages site private.
 
@@ -106,7 +106,7 @@ Next.js App Router, React, TypeScript, Tailwind and shadcn/ui with Base UI. Cucu
 
 `src/lib/json-document.ts` defines structured documents and generators. `src/lib/workspace-actions.ts` implements versioned mutations shared by the server and GitLab adapters. `src/lib/store.ts` handles local persistence; `src/lib/gitlab-backend.ts` handles repository transactions. The editor lives in `src/components/studio.tsx`.
 
-Changes are validated before persistence. Stale edits and incomplete AI streams cannot overwrite newer content. Histories include up to 50 undo/redo states and the last 100 changes. Legacy text workspaces migrate with a preserved backup. Pages polls repository commits; shared presence and unsaved drafts belong to server mode.
+Changes are validated before persistence. Stale edits and incomplete AI streams cannot overwrite newer content. Histories include up to 50 undo/redo states and the last 100 changes. Legacy text workspaces migrate with a preserved backup. Pages polls a shared MR branch, preserves conflicting local drafts and commits only on explicit submission/synchronization. Unsynchronized Pages drafts are automatically stored per browser tab and restored after reload and authorization. Conflict resolution is explicit; shared work is persisted on MR branches. Shared presence and live unsaved input belong to server mode.
 
 [Contributing](CONTRIBUTING.md) · [Security and deployment boundaries](SECURITY.md) · [Changelog](CHANGELOG.md)
 

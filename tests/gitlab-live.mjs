@@ -31,54 +31,91 @@ const file = state.files.find(file => file.filename === 'checkout.feature');
 await check('real GitLab scans specs and ADRs without importing ordinary Markdown', async () => {
   assert.equal(state.files.length, 2); assert.equal(file.source, original);
 });
-await check('JSON and generated source are committed atomically to the selected branch', async () => {
+let reviewId, reviewBranch;
+const targetHead = await client.head();
+await check('edits remain local until an explicit draft MR submission; target branch stays untouched', async () => {
   const source = original.replace('einfach anfühlt', 'ruhig anfühlt');
   state = await backend.request({ action: 'save-document', fileId: file.id, version: file.version, document: documentFromSource(source, file.filename), actor: 'GitLab test' });
   assert.equal(state.files.find(f => f.id === file.id).source, source);
-  const head = await client.head(), commit = await api(`/projects/${project.id}/repository/commits/${head}/diff`);
-  assert.ok(commit.some(item => item.new_path === 'hoospec/workspace.json'));
-  assert.ok(commit.some(item => item.new_path === 'features/checkout.feature'));
+  assert.equal(await client.head(), targetHead);
+  state = await backend.repository.submit('Test shared studio');
+  reviewId = state.repository.mergeRequest.iid; reviewBranch = state.repository.branch;
+  assert.equal(await client.head(), targetHead);
+  assert.ok((await client.mergeRequest(reviewId)).title.startsWith('Draft:'));
+  const head = await client.head(reviewBranch), diff = await api(`/projects/${project.id}/repository/commits/${head}/diff`);
+  assert.ok(diff.some(item => item.new_path === 'hoospec/workspace.json'));
+  assert.ok(diff.some(item => item.new_path === 'features/checkout.feature'));
   assert.equal(decodeRepositoryFile(await client.file('features/checkout.feature', head)), source);
 });
-await check('reconnect preserves canonical JSON, versions and recoverable undo/redo', async () => {
+await check('another member can join the shared draft; undo/redo stays local until synchronizing', async () => {
   const second = new GitLabBackend(config, token);
-  let state = await second.load(); const current = state.files.find(f => f.id === file.id);
+  await second.load(); let state = await second.repository.join(reviewId); const current = state.files.find(f => f.id === file.id);
   assert.equal(current.version, 2); assert.equal(state.history[file.id].undo, 1);
+  const head = await client.head(reviewBranch);
   state = await second.request({ action: 'undo', fileId: file.id, version: current.version, actor: 'GitLab test' });
-  assert.equal(state.files.find(f => f.id === file.id).source, original);
+  assert.equal(state.files.find(f => f.id === file.id).source, original); assert.equal(await client.head(reviewBranch), head);
   state = await second.request({ action: 'redo', fileId: file.id, version: state.files.find(f => f.id === file.id).version, actor: 'GitLab test' });
-  assert.ok(state.files.find(f => f.id === file.id).source.includes('ruhig anfühlt')); second.disconnect();
+  assert.ok(state.files.find(f => f.id === file.id).source.includes('ruhig anfühlt'));
+  assert.equal(state.repository.changes.length, 0); second.disconnect();
 });
-await check('a stale editor cannot overwrite another GitLab commit', async () => {
+await check('simultaneous shared edits preserve the losing draft and reject synchronization', async () => {
   const one = new GitLabBackend(config, token), two = new GitLabBackend(config, token);
-  const state = await one.load(); await two.load(); const current = state.files.find(f => f.id === file.id);
-  const body = { action: 'save-document', fileId: file.id, version: current.version, actor: 'GitLab test', document: documentFromSource(current.source.replace('ruhig anfühlt', 'klar anfühlt'), current.filename) };
-  await one.request(body);
-  await assert.rejects(two.request({ ...body, document: documentFromSource(current.source.replace('ruhig anfühlt', 'veraltet anfühlt'), current.filename) }));
-  assert.ok((await two.load()).files.find(f => f.id === file.id).source.includes('klar anfühlt')); one.disconnect(); two.disconnect();
+  await one.load(); await two.load(); const state = await one.repository.join(reviewId); await two.repository.join(reviewId);
+  const current = state.files.find(f => f.id === file.id);
+  const body = { action: 'save-document', fileId: file.id, version: current.version, actor: 'GitLab test' };
+  await one.request({ ...body, document: documentFromSource(current.source.replace('ruhig anfühlt', 'klar anfühlt'), current.filename) });
+  await two.request({ ...body, document: documentFromSource(current.source.replace('ruhig anfühlt', 'mein Entwurf anfühlt'), current.filename) });
+  await one.repository.submit('Shared checkpoint');
+  const conflict = await two.load(); assert.equal(conflict.repository.conflict, true); assert.ok(conflict.files.find(f => f.id === file.id).source.includes('mein Entwurf'));
+  await assert.rejects(two.repository.submit('Overwrite'), /gemeinsame Stand/);
+  assert.ok((await two.repository.discard()).files.find(f => f.id === file.id).source.includes('klar anfühlt'));
+  assert.equal((await client.mergeRequests(reviewBranch)).length, 1); one.disconnect(); two.disconnect();
 });
-await check('review and ADR decisions persist in the repository with generated Markdown', async () => {
+await check('ADR decisions and metadata synchronize atomically into the same MR', async () => {
   let state = await backend.load(); const adr = state.files.find(f => f.filename === '0001-test.md');
   state = await backend.request({ action: 'adr-decision', fileId: adr.id, version: adr.version, decision: 'We choose explicit versions.', actor: 'GitLab test' });
   const updated = state.files.find(f => f.id === adr.id); assert.ok(updated.source.includes('Status: Angenommen'));
   state = await backend.request({ action: 'review', fileId: adr.id, version: updated.version, actor: 'GitLab test' }); assert.equal(state.files.find(f => f.id === adr.id).reviewed, true);
-  assert.equal(decodeRepositoryFile(await client.file('docs/adr/0001-test.md', await client.head())), updated.source);
+  state = await backend.repository.submit('Record decision');
+  assert.equal(state.repository.mergeRequest.iid, reviewId);
+  assert.equal(decodeRepositoryFile(await client.file('docs/adr/0001-test.md', await client.head(reviewBranch))), updated.source);
+  assert.equal(await client.head(), targetHead);
 });
-await check('manual edits to generated files are never overwritten silently', async () => {
-  const state = await backend.load(), current = state.files.find(f => f.id === file.id), remote = await client.file('features/checkout.feature', await client.head());
-  await client.commit([{ action: 'update', file_path: remote.file_path, content: current.source + '\n# External change\n', last_commit_id: remote.last_commit_id }], 'External edit');
-  await assert.rejects(backend.request({ action: 'save-document', fileId: file.id, version: current.version, actor: 'GitLab test', document: documentFromSource(current.source.replace('klar anfühlt', 'überschrieben anfühlt'), current.filename) }), /außerhalb/);
-  // Restore the disposable fixture for subsequent browser tests.
-  const latest = await client.file(remote.file_path, await client.head());
-  await client.commit([{ action: 'update', file_path: remote.file_path, content: current.source, last_commit_id: latest.last_commit_id }], 'Restore fixture');
+await check('external generated-file edits are detected before synchronization, retaining the local draft', async () => {
+  const state = await backend.load(), current = state.files.find(f => f.id === file.id), remote = await client.file('features/checkout.feature', await client.head(reviewBranch));
+  await client.commit([{ action: 'update', file_path: remote.file_path, content: current.source + '\n# External change\n', last_commit_id: remote.last_commit_id }], 'External edit', reviewBranch);
+  await backend.request({ action: 'save-document', fileId: file.id, version: current.version, actor: 'GitLab test', document: documentFromSource(current.source.replace('klar anfühlt', 'überschrieben anfühlt'), current.filename) });
+  await assert.rejects(backend.repository.submit('Overwrite external file'), /außerhalb/);
+  assert.ok((await backend.load()).files.find(f => f.id === file.id).source.includes('überschrieben'));
+  const latest = await client.file(remote.file_path, await client.head(reviewBranch));
+  await client.commit([{ action: 'update', file_path: remote.file_path, content: current.source, last_commit_id: latest.last_commit_id }], 'Restore fixture', reviewBranch);
+  await backend.repository.discard();
 });
 await check('atomic GitLab batch rejects outdated last_commit_id without changing another action', async () => {
-  const head = await client.head(), remote = await client.file('features/checkout.feature', head), current = decodeRepositoryFile(remote);
-  await client.commit([{ action: 'update', file_path: remote.file_path, content: current + '\n# Race winner\n', last_commit_id: remote.last_commit_id }], 'Race winner');
-  await assert.rejects(client.commit([{ action: 'update', file_path: remote.file_path, content: current + '\n# Race loser\n', last_commit_id: remote.last_commit_id }, { action: 'create', file_path: 'should-not-exist.txt', content: 'Must stay absent' }], 'Race loser'));
-  assert.equal(await client.file('should-not-exist.txt', await client.head()), null);
-  const latest = await client.file(remote.file_path, await client.head());
-  await client.commit([{ action: 'update', file_path: remote.file_path, content: current, last_commit_id: latest.last_commit_id }], 'Restore fixture');
+  const head = await client.head(reviewBranch), remote = await client.file('features/checkout.feature', head), current = decodeRepositoryFile(remote);
+  await client.commit([{ action: 'update', file_path: remote.file_path, content: current + '\n# Race winner\n', last_commit_id: remote.last_commit_id }], 'Race winner', reviewBranch);
+  await assert.rejects(client.commit([{ action: 'update', file_path: remote.file_path, content: current + '\n# Race loser\n', last_commit_id: remote.last_commit_id }, { action: 'create', file_path: 'should-not-exist.txt', content: 'Must stay absent' }], 'Race loser', reviewBranch));
+  assert.equal(await client.file('should-not-exist.txt', await client.head(reviewBranch)), null);
+  const latest = await client.file(remote.file_path, await client.head(reviewBranch));
+  await client.commit([{ action: 'update', file_path: remote.file_path, content: current, last_commit_id: latest.last_commit_id }], 'Restore fixture', reviewBranch);
+});
+await check('GitLab merges the MR explicitly; a clean studio then follows the target', async () => {
+  await backend.load();
+  await api(`/projects/${project.id}/merge_requests/${reviewId}`, 'PUT', { title: 'Test shared studio' });
+  await api(`/projects/${project.id}/merge_requests/${reviewId}?with_merge_status_recheck=true`);
+  let mergeStatus;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const review = await api(`/projects/${project.id}/merge_requests/${reviewId}`);
+    mergeStatus = review.detailed_merge_status;
+    if (mergeStatus === 'mergeable') break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  assert.equal(mergeStatus, 'mergeable', 'GitLab must finish its asynchronous mergeability check before the fixture merges');
+  const merged = await api(`/projects/${project.id}/merge_requests/${reviewId}/merge`, 'PUT', { should_remove_source_branch: true });
+  assert.equal(merged.state, 'merged');
+  const state = await backend.load(); assert.equal(state.repository.mergeRequest, undefined); assert.equal(state.repository.branch, 'main');
+  assert.ok(state.files.find(f => f.id === file.id).source.includes('klar anfühlt'));
+  assert.ok(await client.file('hoospec/workspace.json', await client.head()));
 });
 backend.disconnect();
 // Keep API metadata in a private, unpredictable directory; never follow a pre-existing temp-file symlink.

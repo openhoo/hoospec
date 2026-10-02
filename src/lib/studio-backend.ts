@@ -1,10 +1,19 @@
 import type { Snapshot, SpecFile } from './types';
 
 export type BackendListener = { snapshot: (snapshot: Snapshot) => void; connection: (connected: boolean) => void; error: (message: string) => void };
+export type ReviewSession = { iid: number; title: string; source_branch: string; target_branch: string; web_url: string; state: string };
 export interface StudioBackend {
   readonly collaboration: boolean;
   readonly label: string;
   readonly readOnly?: boolean;
+  repository?: {
+    submit(title: string): Promise<Snapshot>;
+    discard(): Promise<Snapshot>;
+    resolveConflict(): Promise<Snapshot>;
+    sessions(): Promise<ReviewSession[]>;
+    join(iid: number): Promise<Snapshot>;
+    leave(): Promise<Snapshot>;
+  };
   load(): Promise<Snapshot>;
   request(body: Record<string, unknown>): Promise<Snapshot>;
   subscribe(listener: BackendListener): () => void;

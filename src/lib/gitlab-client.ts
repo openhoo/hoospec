@@ -1,4 +1,5 @@
 import type { GitLabAccess } from './gitlab-auth';
+import type { ReviewSession } from './studio-backend';
 export type GitLabConfig = { instance: string; project: string; branch: string; directory: string; specDirectory: string; adrDirectory: string; clientId: string; agentUrl?: string; requireMembership?: boolean };
 export type RepositoryFile = { file_path: string; content: string; encoding: string; last_commit_id: string; size: number };
 export type CommitAction = { action: 'create' | 'update'; file_path: string; content: string; last_commit_id?: string };
@@ -56,7 +57,7 @@ export class GitLabClient {
     try { response = await this.fetcher.call(globalThis, `${this.config.instance}/api/v4${endpoint}`, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000), credentials: 'omit', redirect: 'error', headers: { Authorization: `Bearer ${token}`, ...(init?.body ? { 'Content-Type': 'application/json' } : {}) } }); }
     catch { throw new Error('GitLab ist nicht erreichbar. Bitte Adresse und CORS-Freigabe für diese Pages-Adresse prüfen.'); }
     if (!response.ok) {
-      const message = response.status === 401 ? 'Die GitLab-Anmeldung ist abgelaufen oder ungültig.' : response.status === 403 ? 'GitLab verweigert den Zugriff. Bitte Projektberechtigung, API-Scope und Branch-Schutz prüfen.' : response.status === 404 ? 'Projekt, Branch oder Datei wurde in GitLab nicht gefunden.' : init?.method === 'POST' ? 'GitLab hat den Commit abgelehnt. Der Branch oder eine Datei könnte inzwischen geändert worden sein. Bitte den aktuellen Stand prüfen.' : `GitLab-Anfrage fehlgeschlagen (HTTP ${response.status}).`;
+      const message = response.status === 401 ? 'Die GitLab-Anmeldung ist abgelaufen oder ungültig.' : response.status === 403 ? 'GitLab verweigert den Zugriff. Bitte Projektberechtigung, API-Scope und Branch-Schutz prüfen.' : response.status === 404 ? 'Projekt, Branch oder Datei wurde in GitLab nicht gefunden.' : init?.method === 'POST' ? 'GitLab hat den Schreibvorgang abgelehnt. Der Branch oder eine Datei könnte inzwischen geändert worden sein. Bitte den aktuellen Stand prüfen.' : `GitLab-Anfrage fehlgeschlagen (HTTP ${response.status}).`;
       throw new GitLabError(message, response.status);
     }
     return { data: await response.json() as T, nextPage: response.headers.get('x-next-page') || '' };
@@ -69,9 +70,10 @@ export class GitLabClient {
     if (level < 10) throw new GitLabError('Dieses Studio ist nur für Mitglieder des zugehörigen GitLab-Projekts freigegeben.', 403);
     this.readOnly = level < 30;
   }
-  async head(): Promise<string> {
-    const { data } = await this.api<{ commit: { id: string }; can_push?: boolean }>(`${this.projectPath}/repository/branches/${encodeURIComponent(this.config.branch)}`);
-    this.readOnly = this.readOnly || data.can_push === false;
+  async head(branch = this.config.branch): Promise<string> {
+    const { data } = await this.api<{ commit: { id: string }; can_push?: boolean }>(`${this.projectPath}/repository/branches/${encodeURIComponent(branch)}`);
+    // The target can be protected: Developers write to a separate MR branch.
+    if (branch !== this.config.branch) this.readOnly = this.readOnly || data.can_push === false;
     return data.commit.id;
   }
   async file(path: string, ref: string): Promise<RepositoryFile | null> {
@@ -100,8 +102,23 @@ export class GitLabClient {
     }
     return [...new Set(paths)];
   }
-  async commit(actions: CommitAction[], message: string): Promise<string> {
-    const { data } = await this.api<{ id: string }>(`${this.projectPath}/repository/commits`, { method: 'POST', body: JSON.stringify({ branch: this.config.branch, commit_message: `${message}\n\n[skip ci]`, actions }) });
+  async mergeRequest(iid: number): Promise<ReviewSession> {
+    return (await this.api<ReviewSession>(`${this.projectPath}/merge_requests/${iid}`)).data;
+  }
+  async mergeRequests(sourceBranch?: string): Promise<ReviewSession[]> {
+    const result: ReviewSession[] = []; let page = '1';
+    for (let count = 0; page; count++) {
+      if (count >= 20) throw new Error('Zu viele offene Merge Requests. Bitte in GitLab eingrenzen.');
+      const response = await this.api<ReviewSession[]>(`${this.projectPath}/merge_requests?state=opened&per_page=100&page=${page}&target_branch=${encodeURIComponent(this.config.branch)}${sourceBranch ? `&source_branch=${encodeURIComponent(sourceBranch)}` : ''}`);
+      result.push(...response.data); page = response.nextPage;
+    }
+    return result;
+  }
+  async createMergeRequest(branch: string, title: string): Promise<ReviewSession> {
+    return (await this.api<ReviewSession>(`${this.projectPath}/merge_requests`, { method: 'POST', body: JSON.stringify({ source_branch: branch, target_branch: this.config.branch, title: `Draft: ${title.replace(/^Draft:\s*/i, '')}`, remove_source_branch: true, squash: true, description: 'Gemeinsam in Hoospec bearbeitet. JSON und generierte Dokumente werden zusammen übernommen.' }) })).data;
+  }
+  async commit(actions: CommitAction[], message: string, branch = this.config.branch, startSha?: string): Promise<string> {
+    const { data } = await this.api<{ id: string }>(`${this.projectPath}/repository/commits`, { method: 'POST', body: JSON.stringify({ branch, commit_message: message, actions, ...(startSha ? { start_sha: startSha } : {}) }) });
     return data.id;
   }
 }
